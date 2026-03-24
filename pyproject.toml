@@ -13,8 +13,8 @@ dependencies = [
     "matplotlib",
     "fpdf2",
     "unidecode",
-    "z1monitoring-models @ git+ssh://git@github.com/z1tecnologia/backend_models.git@master",
 ]
+# Nota: z1monitoring-models é peer dependency - deve ser instalado pelo projeto que usa este pacote
 
 [tool.setuptools.packages.find]
 include = ["z1monitoring_agent*"]
