@@ -2606,8 +2606,63 @@ def dimensionar_eta(
 
 
 # =============================================================================
-# 11. ANÁLISE DE PERÍODOS OFFLINE
+# 11. ANÁLISE DE PERÍODOS OFFLINE E RANKING
 # =============================================================================
+
+
+def ranking_offline(dias: int = 30, gap_minutos: int = 15) -> dict:
+    """
+    Ranking das granjas/placas que ficam mais tempo offline.
+    """
+    ctx = get_user_context()
+    try:
+        from z1monitoring_models.models.choose_event_model import get_offline_ranking
+
+        # Buscar granjas do usuário
+        if ctx and ctx.is_admin:
+            farms = Farm.get_all({})
+        elif ctx:
+            farms = Farm.get_all_farms_objs_filtereds({"owner": ctx.associated})
+        else:
+            return {"erro": "Contexto de usuario nao disponivel"}
+
+        if not farms:
+            return {"erro": "Nenhuma granja encontrada"}
+
+        farm_ids = [f.id for f in farms if f.id]
+
+        rows = get_offline_ranking(farm_ids, dias=dias, gap_minutos=gap_minutos, limit=20)
+
+        if not rows:
+            return {
+                "dias": dias,
+                "mensagem": f"Nenhum periodo offline > {gap_minutos}min encontrado nos ultimos {dias} dias",
+            }
+
+        ranking = []
+        for r in rows:
+            total = r["total_offline_min"]
+            if total >= 60:
+                duracao = f"{int(total // 60)}h{int(total % 60)}min"
+            else:
+                duracao = f"{int(total)}min"
+            ranking.append({
+                "granja": r["farm"],
+                "serial": r["serial"],
+                "total_gaps": r["total_gaps"],
+                "total_offline": duracao,
+            })
+
+        return {
+            "dias": dias,
+            "gap_minimo_min": gap_minutos,
+            "total_resultados": len(ranking),
+            "ranking": ranking,
+        }
+
+    except Exception as e:
+        log.error("Erro no ranking offline", error=str(e))
+        return {"erro": str(e)}
 
 
 def consultar_periodos_offline(granja: str, tipo_placa: str = None, dias: int = 30, gap_minutos: int = 15) -> dict:
@@ -3387,6 +3442,21 @@ TOOLS_Z1 = [
             "required": ["consumo_diario_litros", "ferro", "manganes", "ph"],
         },
         function=dimensionar_eta,
+    ),
+    # ===== RANKING DE OFFLINE =====
+    Tool(
+        name="ranking_offline",
+        description="Ranking das granjas/placas que ficam mais tempo offline. "
+                    "Útil para identificar problemas recorrentes de comunicação.",
+        parameters={
+            "type": "object",
+            "properties": {
+                "dias": {"type": "integer", "description": "Quantos dias para trás analisar (default: 30)", "default": 30},
+                "gap_minutos": {"type": "integer", "description": "Intervalo mínimo sem dados para considerar offline (default: 15)", "default": 15},
+            },
+            "required": [],
+        },
+        function=ranking_offline,
     ),
     # ===== ANÁLISE DE PERÍODOS OFFLINE =====
     Tool(
