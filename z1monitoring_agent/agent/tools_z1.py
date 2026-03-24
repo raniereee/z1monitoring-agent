@@ -57,6 +57,9 @@ class UserContext:
         self.is_primary = self.permission_name in ["ETA_REPRESENTANTES", "ETA_VENDEDOR", "URBANO_REPRESENTANTES"]
         self.is_urban = self.permission_name == "URBANO_REPRESENTANTES"
         self.pending_messages = []  # Mensagens extras (imagens, docs) para enviar junto com a resposta
+        self.msisdn = None  # Telefone do usuário (WhatsApp)
+        self.channel = None  # Canal do WhatsApp
+        self.send_immediate_fn = None  # Função para envio imediato (injetada pelo handler)
 
 
 # Contexto global (será setado pelo handler)
@@ -2614,14 +2617,15 @@ def notificar_usuario(mensagem: str) -> dict:
     """
     Envia uma mensagem intermediária ao usuário antes de processamento pesado.
     Use para avisar que uma análise vai demorar.
+    A mensagem é enviada imediatamente (não espera o fim do processamento).
     """
     ctx = get_user_context()
-    if ctx:
-        ctx.pending_messages.insert(0, {
-            "type": "text",
-            "msg": mensagem,
-            "immediate": True,
-        })
+    if ctx and ctx.send_immediate_fn:
+        try:
+            ctx.send_immediate_fn(mensagem)
+            log.info("notificar_usuario: mensagem imediata enviada", mensagem=mensagem[:50])
+        except Exception as e:
+            log.warning("notificar_usuario: erro ao enviar", error=str(e))
     return {"acao": "notificacao_enviada", "mensagem": mensagem}
 
 
