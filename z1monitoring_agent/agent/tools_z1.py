@@ -2606,6 +2606,103 @@ def dimensionar_eta(
 
 
 # =============================================================================
+# 11. ANÁLISE DE PERÍODOS OFFLINE
+# =============================================================================
+
+
+def consultar_periodos_offline(granja: str, tipo_placa: str = None, dias: int = 30, gap_minutos: int = 15) -> dict:
+    """
+    Analisa gaps na tabela de eventos para identificar períodos em que a placa ficou offline.
+
+    Args:
+        granja: Nome da granja
+        tipo_placa: Tipo da placa (FLX, Z1, CCD, etc.). Se não informado, analisa todas.
+        dias: Quantos dias para trás analisar (default: 30)
+        gap_minutos: Intervalo mínimo sem dados para considerar offline (default: 15 min)
+
+    Returns:
+        Lista de períodos offline com duração
+    """
+    try:
+        from z1monitoring_models.models.choose_event_model import get_offline_gaps
+
+        # Buscar granja
+        candidates = _get_farm_candidates(granja)
+        if not candidates:
+            return {"erro": f"Granja '{granja}' nao encontrada"}
+        farm = candidates[0]
+
+        # Buscar placas da granja
+        plates = Plate.get_all({"farm_id": farm.id})
+        if not plates:
+            return {"erro": "Nenhum equipamento encontrado nesta granja"}
+
+        if tipo_placa:
+            plates = [p for p in plates if p.plate_type.upper() == tipo_placa.upper()]
+            if not plates:
+                return {"erro": f"Nenhuma placa tipo {tipo_placa} nesta granja"}
+
+        resultados = []
+
+        for plate in plates:
+            try:
+                gaps = get_offline_gaps(plate.serial, plate.plate_type, dias=dias, gap_minutos=gap_minutos)
+                if not gaps:
+                    continue
+
+                periodos = []
+                total_offline_min = 0
+                for g in gaps:
+                    gap = g["gap_minutos"]
+                    total_offline_min += gap
+                    if gap >= 60:
+                        duracao = f"{int(gap // 60)}h{int(gap % 60)}min"
+                    else:
+                        duracao = f"{int(gap)}min"
+                    periodos.append({
+                        "inicio": g["offline_inicio"].strftime("%d/%m %H:%M") if g["offline_inicio"] else "",
+                        "retorno": g["online_retorno"].strftime("%d/%m %H:%M") if g["online_retorno"] else "",
+                        "duracao": duracao,
+                    })
+
+                if total_offline_min >= 60:
+                    total_str = f"{int(total_offline_min // 60)}h{int(total_offline_min % 60)}min"
+                else:
+                    total_str = f"{int(total_offline_min)}min"
+
+                resultados.append({
+                    "serial": plate.serial,
+                    "tipo": plate.plate_type,
+                    "total_periodos": len(periodos),
+                    "total_offline": total_str,
+                    "periodos": periodos[:10],
+                })
+
+            except Exception as e:
+                log.warning(f"Erro ao analisar offline {plate.serial}: {e}")
+                continue
+
+        if not resultados:
+            return {
+                "granja": farm.name,
+                "dias": dias,
+                "mensagem": f"Nenhum periodo offline > {gap_minutos}min encontrado nos ultimos {dias} dias",
+            }
+
+        return {
+            "granja": farm.name,
+            "dias": dias,
+            "gap_minimo_min": gap_minutos,
+            "equipamentos_com_gaps": len(resultados),
+            "detalhes": resultados,
+        }
+
+    except Exception as e:
+        log.error("Erro ao consultar periodos offline", error=str(e))
+        return {"erro": str(e)}
+
+
+# =============================================================================
 # DEFINIÇÃO DAS FERRAMENTAS PARA O AGENTE
 # =============================================================================
 
@@ -3290,5 +3387,22 @@ TOOLS_Z1 = [
             "required": ["consumo_diario_litros", "ferro", "manganes", "ph"],
         },
         function=dimensionar_eta,
+    ),
+    # ===== ANÁLISE DE PERÍODOS OFFLINE =====
+    Tool(
+        name="consultar_periodos_offline",
+        description="Analisa gaps nos registros de eventos para identificar períodos em que uma placa ficou offline (sem comunicar). "
+                    "Útil para entender impacto no consumo acumulado e identificar problemas de comunicação.",
+        parameters={
+            "type": "object",
+            "properties": {
+                "granja": {"type": "string", "description": "Nome da granja"},
+                "tipo_placa": {"type": "string", "description": "Tipo da placa (FLX, Z1, CCD, NVL, etc.). Se não informado, analisa todas."},
+                "dias": {"type": "integer", "description": "Quantos dias para trás analisar (default: 30)", "default": 30},
+                "gap_minutos": {"type": "integer", "description": "Intervalo mínimo sem dados para considerar offline em minutos (default: 15)", "default": 15},
+            },
+            "required": ["granja"],
+        },
+        function=consultar_periodos_offline,
     ),
 ]
