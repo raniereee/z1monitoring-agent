@@ -2709,7 +2709,9 @@ def consultar_periodos_offline(granja: str, tipo_placa: str = None, dias: int = 
         candidates = _get_farm_candidates(granja)
         if not candidates:
             return {"erro": f"Granja '{granja}' nao encontrada"}
-        farm = candidates[0]
+        farm = Farm.load(candidates[0])
+        if not farm:
+            return {"erro": f"Granja '{granja}' nao encontrada"}
 
         # Buscar placas da granja
         plates = Plate.get_all({"farm_id": farm.id})
