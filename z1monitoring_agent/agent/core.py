@@ -37,6 +37,7 @@ class Agent:
         tools: List[Tool],
         system_prompt: str,
         context: Optional[dict] = None,
+        on_immediate_message: Optional[callable] = None,
     ):
         """
         Args:
@@ -48,6 +49,7 @@ class Agent:
         self.system_prompt = system_prompt
         self.context = context or {}
         self.messages = []  # Histórico da conversa
+        self.on_immediate_message = on_immediate_message  # Callback para mensagens imediatas
 
     def _build_system_prompt(self) -> str:
         """Monta o prompt de sistema com contexto."""
@@ -170,6 +172,20 @@ class Agent:
                                 "content": json.dumps(result, ensure_ascii=False),
                             }
                         )
+
+                # Flush mensagens imediatas (ex: notificar_usuario)
+                if self.on_immediate_message:
+                    try:
+                        from z1monitoring_agent.agent.tools_z1 import get_user_context
+                        ctx = get_user_context()
+                        if ctx and ctx.pending_messages:
+                            immediate = [m for m in ctx.pending_messages if m.get("immediate")]
+                            if immediate:
+                                ctx.pending_messages = [m for m in ctx.pending_messages if not m.get("immediate")]
+                                for msg in immediate:
+                                    self.on_immediate_message(msg)
+                    except Exception:
+                        pass
 
                 # Adiciona resultados ao histórico
                 self.messages.append(

@@ -2606,7 +2606,27 @@ def dimensionar_eta(
 
 
 # =============================================================================
-# 11. ANÁLISE DE PERÍODOS OFFLINE E RANKING
+# 11. NOTIFICAÇÃO INTERMEDIÁRIA
+# =============================================================================
+
+
+def notificar_usuario(mensagem: str) -> dict:
+    """
+    Envia uma mensagem intermediária ao usuário antes de processamento pesado.
+    Use para avisar que uma análise vai demorar.
+    """
+    ctx = get_user_context()
+    if ctx:
+        ctx.pending_messages.insert(0, {
+            "type": "text",
+            "msg": mensagem,
+            "immediate": True,
+        })
+    return {"acao": "notificacao_enviada", "mensagem": mensagem}
+
+
+# =============================================================================
+# 12. ANÁLISE DE PERÍODOS OFFLINE E RANKING
 # =============================================================================
 
 
@@ -3442,6 +3462,20 @@ TOOLS_Z1 = [
             "required": ["consumo_diario_litros", "ferro", "manganes", "ph"],
         },
         function=dimensionar_eta,
+    ),
+    # ===== NOTIFICAÇÃO INTERMEDIÁRIA =====
+    Tool(
+        name="notificar_usuario",
+        description="Envia uma mensagem intermediária ao usuário ANTES de executar uma operação pesada. "
+                    "Use SEMPRE antes de chamar ranking_offline, consultar_periodos_offline ou ranking_granjas.",
+        parameters={
+            "type": "object",
+            "properties": {
+                "mensagem": {"type": "string", "description": "Mensagem para o usuário (ex: 'Analisando dados, isso pode levar um momento...')"},
+            },
+            "required": ["mensagem"],
+        },
+        function=notificar_usuario,
     ),
     # ===== RANKING DE OFFLINE =====
     Tool(
