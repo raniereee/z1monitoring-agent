@@ -4,7 +4,7 @@ from z1monitoring_models.models.choose_event_model import get_events_model
 from z1monitoring_models.dbms import Session
 import datetime
 import structlog
-PLATES_TYPES = ["Z1", "FLX", "NVL", "HDA", "IOX", "WGT", "QP4", "PHI", "ORP", "AZ1", "OZ1", "CLPCG", "QBT", "QBT_CIS", "QP7", "CCD"]
+from z1monitoring_models.constants import PLATES_TYPES
 
 log = structlog.get_logger()
 
