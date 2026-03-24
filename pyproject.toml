@@ -1,0 +1,20 @@
+[build-system]
+requires = ["setuptools>=68.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "z1monitoring-agent"
+version = "0.1.0"
+description = "Z1 Monitoring AI Agent - shared agent core, tools and utilities"
+requires-python = ">=3.10"
+dependencies = [
+    "anthropic",
+    "structlog",
+    "matplotlib",
+    "fpdf2",
+    "unidecode",
+    "z1monitoring-models @ git+ssh://git@github.com/z1tecnologia/backend_models.git@master",
+]
+
+[tool.setuptools.packages.find]
+include = ["z1monitoring_agent*"]
