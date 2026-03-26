@@ -2629,6 +2629,36 @@ def notificar_usuario(mensagem: str) -> dict:
     return {"acao": "notificacao_enviada", "mensagem": mensagem}
 
 
+def enviar_botoes_confirmacao(mensagem: str, botoes: list) -> dict:
+    """
+    Envia botões interativos ao usuário via WhatsApp para confirmação.
+    Use SEMPRE que precisar de uma resposta sim/não ou escolha do usuário.
+    Máximo 3 botões, cada título com no máximo 20 caracteres.
+    """
+    ctx = get_user_context()
+    if not ctx:
+        return {"erro": "Contexto do usuário não disponível"}
+
+    buttons_formatted = []
+    for i, botao in enumerate(botoes):
+        if isinstance(botao, str):
+            buttons_formatted.append({"id": botao.lower().replace(" ", "_"), "title": botao[:20]})
+        elif isinstance(botao, dict):
+            buttons_formatted.append({
+                "id": botao.get("id", f"btn_{i}"),
+                "title": botao.get("title", "")[:20],
+            })
+
+    ctx.pending_messages.append({
+        "type": "buttons",
+        "msg": mensagem,
+        "buttons": buttons_formatted,
+    })
+
+    log.info("enviar_botoes_confirmacao: botões enfileirados", mensagem=mensagem[:50], botoes=buttons_formatted)
+    return {"acao": "botoes_enviados", "mensagem": mensagem, "botoes": buttons_formatted}
+
+
 # =============================================================================
 # 12. ANÁLISE DE PERÍODOS OFFLINE E RANKING
 # =============================================================================
@@ -3514,5 +3544,30 @@ TOOLS_Z1 = [
             "required": ["granja"],
         },
         function=consultar_periodos_offline,
+    ),
+    # ===== BOTÕES INTERATIVOS =====
+    Tool(
+        name="enviar_botoes_confirmacao",
+        description="Envia botões interativos ao usuário via WhatsApp. Use SEMPRE que precisar de confirmação (sim/não) ou que o usuário escolha entre opções. Máximo 3 botões, título máximo 20 caracteres cada.",
+        parameters={
+            "type": "object",
+            "properties": {
+                "mensagem": {"type": "string", "description": "Texto da mensagem que acompanha os botões"},
+                "botoes": {
+                    "type": "array",
+                    "description": "Lista de botões (máx 3). Cada botão pode ser uma string ou objeto {id, title}",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "id": {"type": "string", "description": "ID do botão (ex: 'sim', 'nao', 'cancelar')"},
+                            "title": {"type": "string", "description": "Texto do botão (máx 20 chars)"},
+                        },
+                        "required": ["id", "title"],
+                    },
+                },
+            },
+            "required": ["mensagem", "botoes"],
+        },
+        function=enviar_botoes_confirmacao,
     ),
 ]
