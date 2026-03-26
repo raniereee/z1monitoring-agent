@@ -25,6 +25,8 @@ from .tools import Tool
 from z1monitoring_models.models.urgent_alarm import UrgentAlarm
 from z1monitoring_models.models.farm import Farm
 from z1monitoring_models.models.plates import Plate
+from z1monitoring_models.models.changes_requests import ChangesRequests
+from z1monitoring_models.models.plates_state import PlateState
 
 from z1monitoring_agent.utils.eta_dimensioning import calculate_eta, generate_pdf
 
@@ -2660,6 +2662,188 @@ def enviar_botoes_confirmacao(mensagem: str, botoes: list) -> dict:
 
 
 # =============================================================================
+# 11b. EXECUÇÃO DE AJUSTES (após confirmação do usuário)
+# =============================================================================
+
+
+def confirmar_ajuste_parametro(
+    granja: str,
+    ph_min: float = None,
+    ph_max: float = None,
+    orp_min: float = None,
+    orp_max: float = None,
+    modo_acido: str = None,
+    modo_cloro: str = None,
+    habilitar_acido: bool = None,
+    habilitar_cloro: bool = None,
+    limite_acido_24h: float = None,
+    limite_cloro_24h: float = None,
+    liberar_abs_acido: bool = None,
+    liberar_abs_cloro: bool = None,
+    ativar_abs_acido: bool = None,
+    ativar_abs_cloro: bool = None,
+) -> dict:
+    """
+    Executa o ajuste de parâmetros na placa CCD após confirmação do usuário.
+    Só chame esta função DEPOIS que o usuário confirmar a ação.
+    """
+    ctx = get_user_context()
+    if not ctx:
+        return {"erro": "Contexto do usuário não disponível"}
+
+    try:
+        farm = Farm.get_farm_like_sensibility(granja)
+        if not farm:
+            return {"erro": f"Granja '{granja}' não encontrada"}
+
+        # Busca placa CCD da granja
+        plates = Plate.get_all({"farm_id": farm.id, "plate_type": ["CCD"]})
+        if not plates:
+            return {"erro": f"{farm.name} não possui central de dosagem (CCD)"}
+
+        ccd_plate = plates[0] if isinstance(plates, list) else plates
+        is_online = PlateState.is_online(ccd_plate.serial)
+
+        params_to_merge = {}
+        extra_params_to_merge = {
+            "action_pending": "settings_update",
+        }
+        if ctx.msisdn:
+            extra_params_to_merge["notification_msisdn"] = ctx.msisdn
+        if ctx.channel:
+            extra_params_to_merge["notification_channel"] = ctx.channel
+
+        change_base = {
+            "local": farm.name,
+            "serial": ccd_plate.serial,
+            "user": ctx.user.name if ctx.user else "agent",
+            "plate_type": "CCD",
+            "channel": "whatsapp",
+            "old_value": "-",
+            "result": "success",
+        }
+
+        alteracoes = []
+
+        # pH
+        if ph_min is not None:
+            params_to_merge["ph_inf"] = ph_min
+            ChangesRequests({**change_base, "parameter": "ph_inf", "value": str(ph_min)})
+        if ph_max is not None:
+            params_to_merge["ph_sup"] = ph_max
+            ChangesRequests({**change_base, "parameter": "ph_sup", "value": str(ph_max)})
+        if ph_min is not None and ph_max is not None:
+            alteracoes.append(f"pH: {ph_min} - {ph_max}")
+
+        # ORP
+        if orp_min is not None:
+            params_to_merge["orp_inf"] = orp_min
+            ChangesRequests({**change_base, "parameter": "orp_inf", "value": str(orp_min)})
+        if orp_max is not None:
+            params_to_merge["orp_sup"] = orp_max
+            ChangesRequests({**change_base, "parameter": "orp_sup", "value": str(orp_max)})
+        if orp_min is not None and orp_max is not None:
+            alteracoes.append(f"ORP: {orp_min} - {orp_max} mV")
+
+        # Modo ácido
+        if modo_acido is not None:
+            params_to_merge["acid_mode"] = modo_acido
+            ChangesRequests({**change_base, "parameter": "acid_mode", "value": str(modo_acido)})
+            modo_leg = "automático" if modo_acido == "auto" else "cíclico"
+            alteracoes.append(f"Modo ácido: {modo_leg}")
+
+        # Modo cloro
+        if modo_cloro is not None:
+            params_to_merge["cloro_mode"] = modo_cloro
+            ChangesRequests({**change_base, "parameter": "cloro_mode", "value": str(modo_cloro)})
+            modo_leg = "automático" if modo_cloro == "auto" else "cíclico"
+            alteracoes.append(f"Modo cloro: {modo_leg}")
+
+        # Habilitar/desabilitar ácido
+        if habilitar_acido is not None:
+            acid_en = "enable" if habilitar_acido else "disable"
+            params_to_merge["acid_en"] = acid_en
+            ChangesRequests({**change_base, "parameter": "acid_en", "value": "habilita" if habilitar_acido else "desabilita"})
+            alteracoes.append(f"Dosadora ácido: {'Ligada' if habilitar_acido else 'Desligada'}")
+
+        # Habilitar/desabilitar cloro
+        if habilitar_cloro is not None:
+            cloro_en = "enable" if habilitar_cloro else "disable"
+            params_to_merge["cloro_en"] = cloro_en
+            ChangesRequests({**change_base, "parameter": "cloro_en", "value": "habilita" if habilitar_cloro else "desabilita"})
+            alteracoes.append(f"Dosadora cloro: {'Ligada' if habilitar_cloro else 'Desligada'}")
+
+        # Limites 24h
+        if limite_acido_24h is not None:
+            params_to_merge["acid_max_24h"] = limite_acido_24h
+            ChangesRequests({**change_base, "parameter": "acid_max_24h", "value": str(limite_acido_24h)})
+            alteracoes.append(f"Limite ácido 24h: {limite_acido_24h} kg")
+
+        if limite_cloro_24h is not None:
+            params_to_merge["chlorine_max_24h"] = limite_cloro_24h
+            ChangesRequests({**change_base, "parameter": "chlorine_max_24h", "value": str(limite_cloro_24h)})
+            alteracoes.append(f"Limite cloro 24h: {limite_cloro_24h} kg")
+
+        # ABS liberação
+        if liberar_abs_acido:
+            params_to_merge["abs_acid"] = 0
+            ChangesRequests({**change_base, "parameter": "abs_acid", "value": "liberado"})
+            alteracoes.append("ABS ácido: liberado")
+
+        if liberar_abs_cloro:
+            params_to_merge["abs_chlorine"] = 0
+            ChangesRequests({**change_base, "parameter": "abs_chlorine", "value": "liberado"})
+            alteracoes.append("ABS cloro: liberado")
+
+        # ABS ativação
+        if ativar_abs_acido:
+            params_to_merge["abs_acid"] = 1
+            ChangesRequests({**change_base, "parameter": "abs_acid", "value": "ativado"})
+            alteracoes.append("ABS ácido: ativado")
+
+        if ativar_abs_cloro:
+            params_to_merge["abs_chlorine"] = 1
+            ChangesRequests({**change_base, "parameter": "abs_chlorine", "value": "ativado"})
+            alteracoes.append("ABS cloro: ativado")
+
+        # Atualiza placas associadas (PHI e ORP)
+        associated_plates = ccd_plate.params.get("associateds_plates", []) if ccd_plate.params else []
+        for associated_serial in associated_plates:
+            if associated_serial.startswith("PHI") and ph_min is not None and ph_max is not None:
+                Plate.update_params_merge(
+                    associated_serial, {"sensors_ranges": {"max_ph": float(ph_max), "min_ph": float(ph_min)}}
+                )
+                log.info("Atualizado sensor PHI", serial=associated_serial, min_ph=ph_min, max_ph=ph_max)
+
+            elif associated_serial.startswith("ORP") and orp_min is not None and orp_max is not None:
+                Plate.update_params_merge(
+                    associated_serial, {"sensors_ranges": {"max_orp": float(orp_max), "min_orp": float(orp_min)}}
+                )
+                log.info("Atualizado sensor ORP", serial=associated_serial, min_orp=orp_min, max_orp=orp_max)
+
+        # Grava na placa CCD
+        Plate.update_fields_atomic(
+            ccd_plate.serial, params_merge=params_to_merge, extra_params_merge=extra_params_to_merge
+        )
+
+        log.info("confirmar_ajuste_parametro: sucesso", serial=ccd_plate.serial, farm=farm.name, alteracoes=alteracoes)
+
+        status_msg = "equipamento online, aplicando..." if is_online else "equipamento OFFLINE, será aplicado quando voltar a comunicar"
+
+        return {
+            "sucesso": True,
+            "granja": farm.name,
+            "serial": ccd_plate.serial,
+            "status_equipamento": status_msg,
+            "alteracoes": alteracoes,
+        }
+
+    except Exception as e:
+        log.error("confirmar_ajuste_parametro: erro", error=str(e))
+        return {"erro": str(e)}
+
+
+# =============================================================================
 # 12. ANÁLISE DE PERÍODOS OFFLINE E RANKING
 # =============================================================================
 
@@ -3569,5 +3753,34 @@ TOOLS_Z1 = [
             "required": ["mensagem", "botoes"],
         },
         function=enviar_botoes_confirmacao,
+    ),
+    # ===== EXECUÇÃO DE AJUSTES (após confirmação) =====
+    Tool(
+        name="confirmar_ajuste_parametro",
+        description="Executa o ajuste de parâmetros na placa CCD APÓS o usuário confirmar. "
+                    "Só chame quando o usuário responder 'Confirmar' ou 'Sim' aos botões de confirmação. "
+                    "Passe os mesmos parâmetros que foram apresentados na confirmação.",
+        parameters={
+            "type": "object",
+            "properties": {
+                "granja": {"type": "string", "description": "Nome da granja"},
+                "ph_min": {"type": "number", "description": "pH mínimo"},
+                "ph_max": {"type": "number", "description": "pH máximo"},
+                "orp_min": {"type": "number", "description": "ORP mínimo (mV)"},
+                "orp_max": {"type": "number", "description": "ORP máximo (mV)"},
+                "modo_acido": {"type": "string", "enum": ["auto", "cy"], "description": "Modo dosadora ácido"},
+                "modo_cloro": {"type": "string", "enum": ["auto", "cy"], "description": "Modo dosadora cloro"},
+                "habilitar_acido": {"type": "boolean", "description": "Ligar (true) ou desligar (false) dosadora ácido"},
+                "habilitar_cloro": {"type": "boolean", "description": "Ligar (true) ou desligar (false) dosadora cloro"},
+                "limite_acido_24h": {"type": "number", "description": "Limite consumo ácido 24h (kg)"},
+                "limite_cloro_24h": {"type": "number", "description": "Limite consumo cloro 24h (kg)"},
+                "liberar_abs_acido": {"type": "boolean", "description": "Liberar ABS ácido"},
+                "liberar_abs_cloro": {"type": "boolean", "description": "Liberar ABS cloro"},
+                "ativar_abs_acido": {"type": "boolean", "description": "Ativar ABS ácido"},
+                "ativar_abs_cloro": {"type": "boolean", "description": "Ativar ABS cloro"},
+            },
+            "required": ["granja"],
+        },
+        function=confirmar_ajuste_parametro,
     ),
 ]
