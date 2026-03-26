@@ -2695,7 +2695,7 @@ def confirmar_ajuste_parametro(
     if ctx.permission_name == "ETA_READONLY":
         return {
             "bloqueado": True,
-            "mensagem": "Sua conta é de acompanhamento (somente leitura). A solicitação foi registrada e será encaminhada ao responsável técnico.",
+            "mensagem": "Sua permissão não permite realizar alterações. Todo o fluxo foi executado para que você possa acompanhar o funcionamento real do sistema.",
         }
 
     try:
