@@ -160,6 +160,8 @@ Usuário: "ok" / "obrigado"
    c) Quando o usuário clicar "Confirmar", chame confirmar_ajuste_parametro com os mesmos parâmetros para gravar no equipamento
    NUNCA peça ao usuário para digitar "sim" ou "não" — sempre envie botões interativos
    Se o usuário cancelar, responda "Ação cancelada" e não execute nada
+   IMPORTANTE: Se o resultado retornar "bloqueado"=True, informe ao usuário que sua conta é somente leitura e a solicitação foi encaminhada
+7b. PERMISSÃO ETA_READONLY: Usuários com esta permissão podem CONSULTAR dados normalmente, mas NÃO podem executar ajustes. A ferramenta confirmar_ajuste_parametro já bloqueia automaticamente, mas informe o usuário de forma clara
 8. Se usuário parecer perdido, use mostrar_menu_principal
 9. IMPORTANTE: Diferencie GRANJA de CLIENTE PRIMÁRIO:
    - Se buscar_granja falhar, pode ser um cliente primário

@@ -2691,6 +2691,13 @@ def confirmar_ajuste_parametro(
     if not ctx:
         return {"erro": "Contexto do usuário não disponível"}
 
+    # ETA_READONLY: não executa ações de escrita
+    if ctx.permission_name == "ETA_READONLY":
+        return {
+            "bloqueado": True,
+            "mensagem": "Sua conta é de acompanhamento (somente leitura). A solicitação foi registrada e será encaminhada ao responsável técnico.",
+        }
+
     try:
         farm = Farm.get_farm_like_sensibility(granja)
         if not farm:
@@ -2828,7 +2835,10 @@ def confirmar_ajuste_parametro(
 
         log.info("confirmar_ajuste_parametro: sucesso", serial=ccd_plate.serial, farm=farm.name, alteracoes=alteracoes)
 
-        status_msg = "equipamento online, aplicando..." if is_online else "equipamento OFFLINE, será aplicado quando voltar a comunicar"
+        if is_online:
+            status_msg = "Solicitação recebida. Aguardando confirmação do equipamento..."
+        else:
+            status_msg = "Solicitação recebida, porém o equipamento está OFFLINE. Os parâmetros serão aplicados automaticamente quando o equipamento voltar a se comunicar."
 
         return {
             "sucesso": True,
@@ -2836,6 +2846,7 @@ def confirmar_ajuste_parametro(
             "serial": ccd_plate.serial,
             "status_equipamento": status_msg,
             "alteracoes": alteracoes,
+            "instrucao_resposta": "IMPORTANTE: NÃO diga que a alteração foi aplicada. Informe que a SOLICITAÇÃO foi recebida e está aguardando confirmação do equipamento.",
         }
 
     except Exception as e:
