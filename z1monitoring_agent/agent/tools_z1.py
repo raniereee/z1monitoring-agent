@@ -312,14 +312,12 @@ def consultar_ph_fora_faixa() -> dict:
     """
     ctx = get_user_context()
     try:
+        # Z1 e PHI usam params.status.out_ph
         filters = {"plate_type": ["Z1", "PHI"], "out_ph": "true"}
         if ctx and not ctx.is_admin:
             filters["associateds_allowed"] = ctx.associated
 
         plates = Plate.get_all(filters)
-
-        if not plates:
-            return {"total": 0, "mensagem": "Nenhum equipamento com pH fora da faixa"}
 
         locais = []
         for p in plates:
@@ -332,8 +330,28 @@ def consultar_ph_fora_faixa() -> dict:
                 }
             )
 
+        # CCD usa "Falha: PH fora da faixa" nos readings
+        ccd_filters = {"plate_type": ["CCD"]}
+        if ctx and not ctx.is_admin:
+            ccd_filters["associateds_allowed"] = ctx.associated
+
+        ccd_plates = Plate.get_all(ccd_filters)
+        for p in ccd_plates:
+            sv = p.sensors_value
+            if sv and sv.get("Falha: PH fora da faixa") == 1:
+                locais.append(
+                    {
+                        "granja": p.farm_associated,
+                        "ph_atual": sv.get("PH", 0),
+                        "serial": p.serial,
+                    }
+                )
+
+        if not locais:
+            return {"total": 0, "mensagem": "Nenhum equipamento com pH fora da faixa"}
+
         return {
-            "total": len(plates),
+            "total": len(locais),
             "locais": locais,
         }
 
@@ -351,14 +369,12 @@ def consultar_orp_fora_faixa() -> dict:
     """
     ctx = get_user_context()
     try:
+        # Z1 e ORP usam params.status.out_orp
         filters = {"plate_type": ["Z1", "ORP"], "out_orp": "true"}
         if ctx and not ctx.is_admin:
             filters["associateds_allowed"] = ctx.associated
 
         plates = Plate.get_all(filters)
-
-        if not plates:
-            return {"total": 0, "mensagem": "Nenhum equipamento com ORP fora da faixa"}
 
         locais = []
         for p in plates:
@@ -371,8 +387,28 @@ def consultar_orp_fora_faixa() -> dict:
                 }
             )
 
+        # CCD usa "Falha: ORP fora da faixa" nos readings
+        ccd_filters = {"plate_type": ["CCD"]}
+        if ctx and not ctx.is_admin:
+            ccd_filters["associateds_allowed"] = ctx.associated
+
+        ccd_plates = Plate.get_all(ccd_filters)
+        for p in ccd_plates:
+            sv = p.sensors_value
+            if sv and sv.get("Falha: ORP fora da faixa") == 1:
+                locais.append(
+                    {
+                        "granja": p.farm_associated,
+                        "orp_atual": sv.get("ORP", 0),
+                        "serial": p.serial,
+                    }
+                )
+
+        if not locais:
+            return {"total": 0, "mensagem": "Nenhum equipamento com ORP fora da faixa"}
+
         return {
-            "total": len(plates),
+            "total": len(locais),
             "locais": locais,
         }
 
@@ -613,7 +649,7 @@ def tempo_real_gas(granja: str) -> dict:
 
         farm = Farm.get_farm_like_sensibility(granja)
         if not farm:
-            return {"erro": f"Granja '{granja}' não encontrada"}
+            return {"erro": f"Local '{granja}' não encontrada"}
 
         plates = Plate.get_all({"farm_associated": farm.name})
 
