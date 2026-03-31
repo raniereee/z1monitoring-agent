@@ -401,414 +401,83 @@ def status_equipamento(serial: str) -> dict:
 # =============================================================================
 
 
-def tempo_real_geral(granja: str) -> dict:
+def tempo_real(granja: str, sensor: str = "geral") -> dict:
     """
-    Obtém leitura geral em tempo real de todos os sensores de uma granja.
+    Obtém leitura em tempo real de sensores de uma granja.
 
     Args:
         granja: Nome da granja
+        sensor: geral, ph, orp, temperatura, gas, nivel_agua, fluxo_agua, ozonio, dosadora
 
     Returns:
-        Leituras de todos os sensores
-    """
-    try:
-        from z1monitoring_agent.utils import commons_actions
-
-        farm = Farm.get_farm_like_sensibility(granja)
-        if not farm:
-            return {"erro": f"Granja '{granja}' não encontrada"}
-
-        plates = Plate.get_all({"farm_associated": farm.name})
-
-        if not plates:
-            return {"erro": f"Nenhum equipamento encontrado na granja '{farm.name}'"}
-
-        # Usa a função existente que monta a mensagem de tempo real
-        resultado = commons_actions.handler_tempo_real_geral(farm, plates)
-
-        return {"granja": farm.name, "mensagem": resultado}
-
-    except Exception as e:
-        log.error("Erro ao consultar tempo real geral", error=str(e))
-        return {"erro": str(e)}
-
-
-def tempo_real_ph(granja: str) -> dict:
-    """
-    Obtém leitura de pH em tempo real de uma granja.
-
-    Args:
-        granja: Nome da granja
-
-    Returns:
-        Leitura de pH
+        Leituras do sensor solicitado
     """
     try:
         farm = Farm.get_farm_like_sensibility(granja)
         if not farm:
             return {"erro": f"Granja '{granja}' não encontrada"}
 
-        plates = Plate.get_all(
-            {
-                "farm_associated": farm.name,
-                "plate_type": ["Z1", "PHI"],
-            }
-        )
+        if sensor == "geral":
+            from z1monitoring_agent.utils import commons_actions
+            plates = Plate.get_all({"farm_associated": farm.name})
+            if not plates:
+                return {"erro": f"Nenhum equipamento encontrado em '{farm.name}'"}
+            resultado = commons_actions.handler_tempo_real_geral(farm, plates)
+            return {"granja": farm.name, "mensagem": resultado}
 
-        if not plates:
-            return {"erro": f"Nenhum sensor de pH encontrado em '{farm.name}'"}
+        if sensor == "gas":
+            from z1monitoring_agent.utils import commons_actions
+            plates = Plate.get_all({"farm_associated": farm.name})
+            if not plates:
+                return {"erro": f"Nenhum equipamento encontrado em '{farm.name}'"}
+            resultado = commons_actions.handler_tempo_real_gas(farm, plates)
+            return {"granja": farm.name, "mensagem": resultado}
 
-        leituras = []
-        for plate in plates:
-            if plate.sensors_value and "ph" in plate.sensors_value:
-                leituras.append(
-                    {
-                        "serial": plate.serial,
-                        "ph": plate.sensors_value.get("ph"),
-                        "ph_min": plate.sensors_value.get("ph_min"),
-                        "ph_max": plate.sensors_value.get("ph_max"),
-                        "comunicando": plate.have_communication,
-                    }
-                )
-
-        return {
-            "granja": farm.name,
-            "leituras": leituras,
+        # Mapeamento sensor → tipo de placa e campos
+        sensor_config = {
+            "ph": {"plate_types": ["Z1", "PHI", "CCD"], "fields": lambda sv: {"ph": sv.get("ph") or sv.get("PH"), "ph_min": sv.get("ph_min"), "ph_max": sv.get("ph_max")}},
+            "orp": {"plate_types": ["Z1", "ORP", "CCD"], "fields": lambda sv: {"orp": sv.get("orp") or sv.get("ORP"), "orp_min": sv.get("orp_min"), "orp_max": sv.get("orp_max")}},
+            "temperatura": {"plate_types": ["Z1", "AZ1", "CCD"], "fields": lambda sv: {"temperatura": sv.get("temperature") or sv.get("Temperatura da Água")}},
+            "nivel_agua": {"plate_types": ["NVL"], "fields": lambda sv: {"nivel_percentual": sv.get("level_percentage"), "volume_litros": sv.get("volume")}},
+            "fluxo_agua": {"plate_types": ["FLX"], "fields": lambda sv: {"fluxo_lpm": sv.get("flow"), "total_litros": sv.get("total_volume")}},
+            "dosadora": {"plate_types": ["CCD"], "fields": lambda sv: {
+                "acido_kg": sv.get("Ácido"), "cloro_kg": sv.get("Cloro"),
+                "modo_acido": sv.get("Modo Dosadora Ácido"), "modo_cloro": sv.get("Modo Dosadora Cloro"),
+                "dosadora_acido_ligada": sv.get("Comando Dosadora Ácido"), "dosadora_cloro_ligada": sv.get("Comando Dosadora Cloro"),
+            }},
+            "ozonio": {"plate_types": ["OZ1"], "fields": lambda sv: {"orp": sv.get("orp"), "horas_ligado": sv.get("hours_on")}},
         }
 
-    except Exception as e:
-        log.error("Erro ao consultar pH", error=str(e))
-        return {"erro": str(e)}
+        config = sensor_config.get(sensor)
+        if not config:
+            return {"erro": f"Sensor '{sensor}' não reconhecido. Use: geral, ph, orp, temperatura, gas, nivel_agua, fluxo_agua, ozonio, dosadora"}
 
-
-def tempo_real_orp(granja: str) -> dict:
-    """
-    Obtém leitura de ORP em tempo real de uma granja.
-
-    Args:
-        granja: Nome da granja
-
-    Returns:
-        Leitura de ORP
-    """
-    try:
-        farm = Farm.get_farm_like_sensibility(granja)
-        if not farm:
-            return {"erro": f"Granja '{granja}' não encontrada"}
-
-        plates = Plate.get_all(
-            {
-                "farm_associated": farm.name,
-                "plate_type": ["Z1", "ORP"],
-            }
-        )
-
+        plates = Plate.get_all({"farm_associated": farm.name, "plate_type": config["plate_types"]})
         if not plates:
-            return {"erro": f"Nenhum sensor de ORP encontrado em '{farm.name}'"}
+            return {"erro": f"Nenhum sensor de {sensor} encontrado em '{farm.name}'"}
 
         leituras = []
         for plate in plates:
-            if plate.sensors_value and "orp" in plate.sensors_value:
-                leituras.append(
-                    {
-                        "serial": plate.serial,
-                        "orp": plate.sensors_value.get("orp"),
-                        "orp_min": plate.sensors_value.get("orp_min"),
-                        "orp_max": plate.sensors_value.get("orp_max"),
-                        "comunicando": plate.have_communication,
-                    }
-                )
+            sv = plate.sensors_value
+            if not sv:
+                continue
+            info = {"serial": plate.serial, "comunicando": plate.have_communication}
+            info.update(config["fields"](sv))
 
-        return {
-            "granja": farm.name,
-            "leituras": leituras,
-        }
+            # Dados extras pra ozônio
+            if sensor == "ozonio":
+                params = plate.params or {}
+                if params.get("cell_en") is not None:
+                    info["celula_ligada"] = params["cell_en"] in (1, True, "1")
+                if params.get("dryer_en") is not None:
+                    info["secador_ligado"] = params["dryer_en"] in (1, True, "1")
 
-    except Exception as e:
-        log.error("Erro ao consultar ORP", error=str(e))
-        return {"erro": str(e)}
-
-
-def tempo_real_temperatura(granja: str) -> dict:
-    """
-    Obtém leitura de temperatura em tempo real de uma granja.
-
-    Args:
-        granja: Nome da granja
-
-    Returns:
-        Leitura de temperatura
-    """
-    try:
-        farm = Farm.get_farm_like_sensibility(granja)
-        if not farm:
-            return {"erro": f"Granja '{granja}' não encontrada"}
-
-        plates = Plate.get_all(
-            {
-                "farm_associated": farm.name,
-                "plate_type": ["Z1", "AZ1"],
-            }
-        )
-
-        if not plates:
-            return {"erro": f"Nenhum sensor de temperatura em '{farm.name}'"}
-
-        leituras = []
-        for plate in plates:
-            if plate.sensors_value and "temperature" in plate.sensors_value:
-                leituras.append(
-                    {
-                        "serial": plate.serial,
-                        "temperatura": plate.sensors_value.get("temperature"),
-                        "comunicando": plate.have_communication,
-                    }
-                )
-
-        return {
-            "granja": farm.name,
-            "leituras": leituras,
-        }
-
-    except Exception as e:
-        log.error("Erro ao consultar temperatura", error=str(e))
-        return {"erro": str(e)}
-
-
-def tempo_real_gas(granja: str) -> dict:
-    """
-    Obtém nível de gás em tempo real de uma granja.
-
-    Args:
-        granja: Nome da granja
-
-    Returns:
-        Nível de gás
-    """
-    try:
-        from z1monitoring_agent.utils import commons_actions
-
-        farm = Farm.get_farm_like_sensibility(granja)
-        if not farm:
-            return {"erro": f"Local '{granja}' não encontrada"}
-
-        plates = Plate.get_all({"farm_associated": farm.name})
-
-        if not plates:
-            return {"erro": f"Nenhum equipamento encontrado em '{farm.name}'"}
-
-        # Usa handler existente
-        resultado = commons_actions.handler_tempo_real_gas(farm, plates)
-
-        return {"granja": farm.name, "mensagem": resultado}
-
-    except Exception as e:
-        log.error("Erro ao consultar gás", error=str(e))
-        return {"erro": str(e)}
-
-
-def tempo_real_nivel_agua(granja: str) -> dict:
-    """
-    Obtém nível de água em tempo real de uma granja.
-
-    Args:
-        granja: Nome da granja
-
-    Returns:
-        Nível de água
-    """
-    try:
-        farm = Farm.get_farm_like_sensibility(granja)
-        if not farm:
-            return {"erro": f"Granja '{granja}' não encontrada"}
-
-        plates = Plate.get_all(
-            {
-                "farm_associated": farm.name,
-                "plate_type": ["NVL"],
-            }
-        )
-
-        if not plates:
-            return {"erro": f"Nenhum sensor de nível encontrado em '{farm.name}'"}
-
-        leituras = []
-        for plate in plates:
-            if plate.sensors_value:
-                leituras.append(
-                    {
-                        "serial": plate.serial,
-                        "nivel_percentual": plate.sensors_value.get("level_percentage"),
-                        "volume_litros": plate.sensors_value.get("volume"),
-                        "comunicando": plate.have_communication,
-                    }
-                )
-
-        return {
-            "granja": farm.name,
-            "leituras": leituras,
-        }
-
-    except Exception as e:
-        log.error("Erro ao consultar nível de água", error=str(e))
-        return {"erro": str(e)}
-
-
-def tempo_real_fluxo_agua(granja: str) -> dict:
-    """
-    Obtém fluxo de água em tempo real de uma granja.
-
-    Args:
-        granja: Nome da granja
-
-    Returns:
-        Fluxo de água
-    """
-    try:
-        farm = Farm.get_farm_like_sensibility(granja)
-        if not farm:
-            return {"erro": f"Granja '{granja}' não encontrada"}
-
-        plates = Plate.get_all(
-            {
-                "farm_associated": farm.name,
-                "plate_type": ["FLX"],
-            }
-        )
-
-        if not plates:
-            return {"erro": f"Nenhum sensor de fluxo encontrado em '{farm.name}'"}
-
-        leituras = []
-        for plate in plates:
-            if plate.sensors_value:
-                leituras.append(
-                    {
-                        "serial": plate.serial,
-                        "fluxo_lpm": plate.sensors_value.get("flow"),
-                        "total_litros": plate.sensors_value.get("total_volume"),
-                        "comunicando": plate.have_communication,
-                    }
-                )
-
-        return {
-            "granja": farm.name,
-            "leituras": leituras,
-        }
-
-    except Exception as e:
-        log.error("Erro ao consultar fluxo de água", error=str(e))
-        return {"erro": str(e)}
-
-
-def tempo_real_ozonio(granja: str) -> dict:
-    """
-    Obtém leitura de ozônio em tempo real de uma granja.
-
-    Args:
-        granja: Nome da granja
-
-    Returns:
-        Leitura de ozônio com sensores e configuração atual
-    """
-    try:
-        farm = Farm.get_farm_like_sensibility(granja)
-        if not farm:
-            return {"erro": f"Granja '{granja}' não encontrada"}
-
-        plates = Plate.get_all(
-            {
-                "farm_associated": farm.name,
-                "plate_type": ["OZ1"],
-            }
-        )
-
-        if not plates:
-            return {"erro": f"Nenhum gerador de ozônio encontrado em '{farm.name}'"}
-
-        leituras = []
-        for plate in plates:
-            info = {
-                "serial": plate.serial,
-                "comunicando": plate.have_communication,
-            }
-            if plate.sensors_value:
-                info["orp"] = plate.sensors_value.get("orp")
-                info["horas_ligado"] = plate.sensors_value.get("hours_on")
-            # Inclui configuração atual
-            params = plate.params or {}
-            cell_en = params.get("cell_en")
-            dryer_en = params.get("dryer_en")
-            if cell_en is not None:
-                info["celula_ligada"] = cell_en in (1, True, "1")
-            if dryer_en is not None:
-                info["secador_ligado"] = dryer_en in (1, True, "1")
-            if params.get("dryer_temp") is not None:
-                info["temperatura_secador"] = params["dryer_temp"]
-            if params.get("cell_horas_on") is not None:
-                info["tempo_celula_ligada_min"] = params["cell_horas_on"]
-            if params.get("cell_min_off") is not None:
-                info["tempo_celula_desligada_min"] = params["cell_min_off"]
             leituras.append(info)
 
-        return {
-            "granja": farm.name,
-            "leituras": leituras,
-        }
+        return {"granja": farm.name, "sensor": sensor, "leituras": leituras}
 
     except Exception as e:
-        log.error("Erro ao consultar ozônio", error=str(e))
-        return {"erro": str(e)}
-
-
-def tempo_real_dosadora(granja: str) -> dict:
-    """
-    Obtém status da central de dosagem (CCD) em tempo real.
-
-    Args:
-        granja: Nome da granja
-
-    Returns:
-        Status das dosadoras
-    """
-    try:
-        farm = Farm.get_farm_like_sensibility(granja)
-        if not farm:
-            return {"erro": f"Granja '{granja}' não encontrada"}
-
-        plates = Plate.get_all(
-            {
-                "farm_associated": farm.name,
-                "plate_type": ["CCD"],
-            }
-        )
-
-        if not plates:
-            return {"erro": f"Nenhuma central de dosagem encontrada em '{farm.name}'"}
-
-        leituras = []
-        for plate in plates:
-            if plate.sensors_value:
-                leituras.append(
-                    {
-                        "serial": plate.serial,
-                        "acido_kg": plate.sensors_value.get("acid_weight"),
-                        "cloro_kg": plate.sensors_value.get("chlorine_weight"),
-                        "modo_acido": plate.sensors_value.get("acid_mode"),
-                        "modo_cloro": plate.sensors_value.get("chlorine_mode"),
-                        "dosadora_acido_ligada": plate.sensors_value.get("acid_pump_on"),
-                        "dosadora_cloro_ligada": plate.sensors_value.get("chlorine_pump_on"),
-                        "comunicando": plate.have_communication,
-                    }
-                )
-
-        return {
-            "granja": farm.name,
-            "leituras": leituras,
-        }
-
-    except Exception as e:
-        log.error("Erro ao consultar dosadora", error=str(e))
+        log.error("Erro ao consultar tempo real", error=str(e))
         return {"erro": str(e)}
 
 
@@ -3194,112 +2863,22 @@ TOOLS_Z1 = [
     ),
     # ===== TEMPO REAL =====
     Tool(
-        name="tempo_real_geral",
-        description="Obtém leitura geral de todos os sensores de uma granja em tempo real.",
+        name="tempo_real",
+        description="Obtém leitura em tempo real de sensores de uma granja. "
+                    "Pode consultar: geral (todos), ph, orp, temperatura, gas, nivel_agua, fluxo_agua, ozonio, dosadora.",
         parameters={
             "type": "object",
             "properties": {
                 "granja": {"type": "string", "description": "Nome da granja"},
+                "sensor": {
+                    "type": "string",
+                    "description": "Sensor a consultar: geral, ph, orp, temperatura, gas, nivel_agua, fluxo_agua, ozonio, dosadora (default: geral)",
+                    "default": "geral",
+                },
             },
             "required": ["granja"],
         },
-        function=tempo_real_geral,
-    ),
-    Tool(
-        name="tempo_real_ph",
-        description="Obtém leitura de pH em tempo real de uma granja.",
-        parameters={
-            "type": "object",
-            "properties": {
-                "granja": {"type": "string", "description": "Nome da granja"},
-            },
-            "required": ["granja"],
-        },
-        function=tempo_real_ph,
-    ),
-    Tool(
-        name="tempo_real_orp",
-        description="Obtém leitura de ORP em tempo real de uma granja.",
-        parameters={
-            "type": "object",
-            "properties": {
-                "granja": {"type": "string", "description": "Nome da granja"},
-            },
-            "required": ["granja"],
-        },
-        function=tempo_real_orp,
-    ),
-    Tool(
-        name="tempo_real_temperatura",
-        description="Obtém leitura de temperatura em tempo real de uma granja.",
-        parameters={
-            "type": "object",
-            "properties": {
-                "granja": {"type": "string", "description": "Nome da granja"},
-            },
-            "required": ["granja"],
-        },
-        function=tempo_real_temperatura,
-    ),
-    Tool(
-        name="tempo_real_gas",
-        description="Obtém nível de gás em tempo real de uma granja. Mostra peso, percentual e autonomia.",
-        parameters={
-            "type": "object",
-            "properties": {
-                "granja": {"type": "string", "description": "Nome da granja"},
-            },
-            "required": ["granja"],
-        },
-        function=tempo_real_gas,
-    ),
-    Tool(
-        name="tempo_real_nivel_agua",
-        description="Obtém nível de água do reservatório em tempo real.",
-        parameters={
-            "type": "object",
-            "properties": {
-                "granja": {"type": "string", "description": "Nome da granja"},
-            },
-            "required": ["granja"],
-        },
-        function=tempo_real_nivel_agua,
-    ),
-    Tool(
-        name="tempo_real_fluxo_agua",
-        description="Obtém fluxo de água em tempo real (litros por minuto).",
-        parameters={
-            "type": "object",
-            "properties": {
-                "granja": {"type": "string", "description": "Nome da granja"},
-            },
-            "required": ["granja"],
-        },
-        function=tempo_real_fluxo_agua,
-    ),
-    Tool(
-        name="tempo_real_ozonio",
-        description="Obtém leitura do gerador de ozônio em tempo real.",
-        parameters={
-            "type": "object",
-            "properties": {
-                "granja": {"type": "string", "description": "Nome da granja"},
-            },
-            "required": ["granja"],
-        },
-        function=tempo_real_ozonio,
-    ),
-    Tool(
-        name="tempo_real_dosadora",
-        description="Obtém status da central de dosagem (CCD) - quantidade de ácido/cloro e modo de operação.",
-        parameters={
-            "type": "object",
-            "properties": {
-                "granja": {"type": "string", "description": "Nome da granja"},
-            },
-            "required": ["granja"],
-        },
-        function=tempo_real_dosadora,
+        function=tempo_real,
     ),
     # ===== ANÁLISES =====
     Tool(
