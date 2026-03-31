@@ -133,93 +133,61 @@ def consultar_alarmes(granja: str = None, dias: int = 1) -> dict:
         return {"erro": str(e)}
 
 
-def consultar_equipamentos_offline() -> dict:
+def consultar_equipamentos(status: str = "offline") -> dict:
     """
-    Lista todos os equipamentos que estão offline (sem comunicação),
-    com data do último dado recebido.
+    Lista equipamentos por status de comunicação.
+
+    Args:
+        status: offline ou online
 
     Returns:
-        Lista de equipamentos offline ordenados por tempo offline
+        Lista de equipamentos com o status solicitado
     """
     ctx = get_user_context()
     try:
-        from z1monitoring_models.models.events_last import LastEvent
-        from datetime import datetime
-
-        filters = {"have_communication": False}
+        is_offline = status == "offline"
+        filters = {"have_communication": not is_offline}
         if ctx and not ctx.is_admin:
             filters["associateds_allowed"] = ctx.associated
 
         plates = Plate.get_all(filters)
 
         if not plates:
-            return {"total": 0, "mensagem": "Nenhum equipamento offline no momento"}
+            return {"total": 0, "mensagem": f"Nenhum equipamento {status}"}
 
-        now = datetime.now()
         equipamentos = []
-        for plate in plates:
-            last = LastEvent.get_last_register(plate.owner, plate.serial)
-            ultimo_contato = last.updated_at if last else None
 
-            dias_offline = 0
-            if ultimo_contato:
-                dias_offline = (now - ultimo_contato).days
+        if is_offline:
+            from z1monitoring_models.models.events_last import LastEvent
+            from datetime import datetime
+            now = datetime.now()
 
-            equipamentos.append(
-                {
+            for plate in plates:
+                last = LastEvent.get_last_register(plate.owner, plate.serial)
+                ultimo_contato = last.updated_at if last else None
+                dias_offline = (now - ultimo_contato).days if ultimo_contato else 999
+
+                equipamentos.append({
                     "serial": plate.serial,
                     "tipo": plate.plate_type,
                     "granja": plate.farm_associated,
                     "ultimo_contato": ultimo_contato.strftime("%d/%m/%Y %H:%M") if ultimo_contato else "desconhecido",
                     "dias_offline": dias_offline,
-                }
-            )
+                })
 
-        equipamentos.sort(key=lambda x: x["dias_offline"], reverse=True)
-
-        return {
-            "total": len(equipamentos),
-            "mostrando": min(len(equipamentos), 30),
-            "equipamentos": equipamentos[:30],
-        }
-
-    except Exception as e:
-        log.error("Erro ao consultar equipamentos offline", error=str(e))
-        return {"erro": str(e)}
-
-
-def consultar_equipamentos_online() -> dict:
-    """
-    Lista todos os equipamentos que estão online (comunicando).
-
-    Returns:
-        Lista de equipamentos online
-    """
-    ctx = get_user_context()
-    try:
-        filters = {"have_communication": True}
-        if ctx and not ctx.is_admin:
-            filters["associateds_allowed"] = ctx.associated
-
-        plates = Plate.get_all(filters)
-
-        if not plates:
-            return {"total": 0, "mensagem": "Nenhum equipamento online"}
-
-        equipamentos = []
-        for plate in plates[:20]:
-            equipamentos.append(
-                {
+            equipamentos.sort(key=lambda x: x["dias_offline"], reverse=True)
+        else:
+            for plate in plates[:30]:
+                equipamentos.append({
                     "serial": plate.serial,
                     "tipo": plate.plate_type,
                     "granja": plate.farm_associated,
-                }
-            )
+                })
 
         return {
             "total": len(plates),
-            "mostrando": len(equipamentos),
-            "equipamentos": equipamentos,
+            "mostrando": min(len(equipamentos), 30),
+            "equipamentos": equipamentos[:30],
         }
 
     except Exception as e:
@@ -2808,16 +2776,16 @@ TOOLS_Z1 = [
         function=consultar_alarmes,
     ),
     Tool(
-        name="consultar_equipamentos_offline",
-        description="Lista todos os equipamentos que estão offline/sem comunicação.",
-        parameters={"type": "object", "properties": {}, "required": []},
-        function=consultar_equipamentos_offline,
-    ),
-    Tool(
-        name="consultar_equipamentos_online",
-        description="Lista todos os equipamentos que estão online/comunicando.",
-        parameters={"type": "object", "properties": {}, "required": []},
-        function=consultar_equipamentos_online,
+        name="consultar_equipamentos",
+        description="Lista equipamentos por status de comunicação (online ou offline). Offline mostra dias sem comunicar.",
+        parameters={
+            "type": "object",
+            "properties": {
+                "status": {"type": "string", "description": "offline ou online (default: offline)", "default": "offline"},
+            },
+            "required": [],
+        },
+        function=consultar_equipamentos,
     ),
     Tool(
         name="consultar_falta_insumo",
