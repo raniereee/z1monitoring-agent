@@ -1480,10 +1480,6 @@ def suporte(acao: str = "solicitar", tipo_equipamento: str = None, topico: str =
 
     return {"erro": f"Ação '{acao}' não reconhecida. Use: solicitar, guia, listar_topicos"}
 
-    except Exception as e:
-        log.error("Erro ao listar tópicos de suporte", error=str(e))
-        return {"erro": str(e)}
-
 
 # =============================================================================
 # 8. GRÁFICOS E RELATÓRIOS
