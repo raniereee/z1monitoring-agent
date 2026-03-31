@@ -227,63 +227,45 @@ def consultar_equipamentos_online() -> dict:
         return {"erro": str(e)}
 
 
-def consultar_falta_acido() -> dict:
+def consultar_falta_insumo(insumo: str = "todos") -> dict:
     """
-    Lista equipamentos com falta de ácido.
+    Lista equipamentos com falta de insumo (ácido, cloro ou ambos).
+
+    Args:
+        insumo: acido, cloro, ou todos
 
     Returns:
-        Lista de equipamentos sem ácido
+        Lista de equipamentos sem o insumo especificado
     """
     ctx = get_user_context()
     try:
-        filters = {"plate_type": ["Z1"], "have_acid": False}
-        if ctx and not ctx.is_admin:
-            filters["associateds_allowed"] = ctx.associated
+        resultados = []
 
-        plates = Plate.get_all(filters)
+        if insumo in ("acido", "todos"):
+            filters = {"plate_type": ["Z1"], "have_acid": False}
+            if ctx and not ctx.is_admin:
+                filters["associateds_allowed"] = ctx.associated
+            plates = Plate.get_all(filters)
+            if plates:
+                locais = list(set([p.farm_associated for p in plates if p.farm_associated]))
+                resultados.append({"insumo": "acido", "total": len(plates), "locais_afetados": locais})
 
-        if not plates:
-            return {"total": 0, "mensagem": "Nenhum equipamento com falta de ácido"}
+        if insumo in ("cloro", "todos"):
+            filters = {"plate_type": ["Z1"], "have_chlorine": False}
+            if ctx and not ctx.is_admin:
+                filters["associateds_allowed"] = ctx.associated
+            plates = Plate.get_all(filters)
+            if plates:
+                locais = list(set([p.farm_associated for p in plates if p.farm_associated]))
+                resultados.append({"insumo": "cloro", "total": len(plates), "locais_afetados": locais})
 
-        locais = list(set([p.farm_associated for p in plates if p.farm_associated]))
+        if not resultados:
+            return {"total": 0, "mensagem": f"Nenhum equipamento com falta de {'insumo' if insumo == 'todos' else insumo}"}
 
-        return {
-            "total": len(plates),
-            "locais_afetados": locais,
-        }
-
-    except Exception as e:
-        log.error("Erro ao consultar falta de ácido", error=str(e))
-        return {"erro": str(e)}
-
-
-def consultar_falta_cloro() -> dict:
-    """
-    Lista equipamentos com falta de cloro.
-
-    Returns:
-        Lista de equipamentos sem cloro
-    """
-    ctx = get_user_context()
-    try:
-        filters = {"plate_type": ["Z1"], "have_chlorine": False}
-        if ctx and not ctx.is_admin:
-            filters["associateds_allowed"] = ctx.associated
-
-        plates = Plate.get_all(filters)
-
-        if not plates:
-            return {"total": 0, "mensagem": "Nenhum equipamento com falta de cloro"}
-
-        locais = list(set([p.farm_associated for p in plates if p.farm_associated]))
-
-        return {
-            "total": len(plates),
-            "locais_afetados": locais,
-        }
+        return {"resultados": resultados}
 
     except Exception as e:
-        log.error("Erro ao consultar falta de cloro", error=str(e))
+        log.error("Erro ao consultar falta de insumo", error=str(e))
         return {"erro": str(e)}
 
 
@@ -318,117 +300,61 @@ def consultar_falta_gas() -> dict:
         return {"erro": str(e)}
 
 
-def consultar_ph_fora_faixa() -> dict:
+def consultar_sensor_fora_faixa(sensor: str = "todos") -> dict:
     """
-    Lista equipamentos com pH fora da faixa configurada.
+    Lista equipamentos com sensor fora da faixa configurada.
+
+    Args:
+        sensor: ph, orp, ou todos
 
     Returns:
-        Lista de equipamentos com pH fora da faixa
+        Lista de equipamentos com o sensor fora da faixa
     """
     ctx = get_user_context()
     try:
-        # Z1 e PHI usam params.status.out_ph
-        filters = {"plate_type": ["Z1", "PHI"], "out_ph": "true"}
-        if ctx and not ctx.is_admin:
-            filters["associateds_allowed"] = ctx.associated
+        resultados = []
 
-        plates = Plate.get_all(filters)
+        if sensor in ("ph", "todos"):
+            filters = {"plate_type": ["Z1", "PHI"], "out_ph": "true"}
+            if ctx and not ctx.is_admin:
+                filters["associateds_allowed"] = ctx.associated
+            plates = Plate.get_all(filters)
+            for p in plates:
+                sv = p.sensors_value
+                resultados.append({"sensor": "ph", "granja": p.farm_associated, "valor": sv.get("ph", 0) if sv else 0, "serial": p.serial})
 
-        locais = []
-        for p in plates:
-            ph_atual = p.sensors_value.get("ph", 0) if p.sensors_value else 0
-            locais.append(
-                {
-                    "granja": p.farm_associated,
-                    "ph_atual": ph_atual,
-                    "serial": p.serial,
-                }
-            )
+            ccd_filters = {"plate_type": ["CCD"]}
+            if ctx and not ctx.is_admin:
+                ccd_filters["associateds_allowed"] = ctx.associated
+            for p in Plate.get_all(ccd_filters):
+                sv = p.sensors_value
+                if sv and sv.get("Falha: PH fora da faixa") == 1:
+                    resultados.append({"sensor": "ph", "granja": p.farm_associated, "valor": sv.get("PH", 0), "serial": p.serial})
 
-        # CCD usa "Falha: PH fora da faixa" nos readings
-        ccd_filters = {"plate_type": ["CCD"]}
-        if ctx and not ctx.is_admin:
-            ccd_filters["associateds_allowed"] = ctx.associated
+        if sensor in ("orp", "todos"):
+            filters = {"plate_type": ["Z1", "ORP"], "out_orp": "true"}
+            if ctx and not ctx.is_admin:
+                filters["associateds_allowed"] = ctx.associated
+            plates = Plate.get_all(filters)
+            for p in plates:
+                sv = p.sensors_value
+                resultados.append({"sensor": "orp", "granja": p.farm_associated, "valor": sv.get("orp", 0) if sv else 0, "serial": p.serial})
 
-        ccd_plates = Plate.get_all(ccd_filters)
-        for p in ccd_plates:
-            sv = p.sensors_value
-            if sv and sv.get("Falha: PH fora da faixa") == 1:
-                locais.append(
-                    {
-                        "granja": p.farm_associated,
-                        "ph_atual": sv.get("PH", 0),
-                        "serial": p.serial,
-                    }
-                )
+            ccd_filters = {"plate_type": ["CCD"]}
+            if ctx and not ctx.is_admin:
+                ccd_filters["associateds_allowed"] = ctx.associated
+            for p in Plate.get_all(ccd_filters):
+                sv = p.sensors_value
+                if sv and sv.get("Falha: ORP fora da faixa") == 1:
+                    resultados.append({"sensor": "orp", "granja": p.farm_associated, "valor": sv.get("ORP", 0), "serial": p.serial})
 
-        if not locais:
-            return {"total": 0, "mensagem": "Nenhum equipamento com pH fora da faixa"}
+        if not resultados:
+            return {"total": 0, "mensagem": f"Nenhum equipamento com {'sensor' if sensor == 'todos' else sensor} fora da faixa"}
 
-        return {
-            "total": len(locais),
-            "locais": locais,
-        }
+        return {"total": len(resultados), "locais": resultados}
 
     except Exception as e:
-        log.error("Erro ao consultar pH fora da faixa", error=str(e))
-        return {"erro": str(e)}
-
-
-def consultar_orp_fora_faixa() -> dict:
-    """
-    Lista equipamentos com ORP fora da faixa configurada.
-
-    Returns:
-        Lista de equipamentos com ORP fora da faixa
-    """
-    ctx = get_user_context()
-    try:
-        # Z1 e ORP usam params.status.out_orp
-        filters = {"plate_type": ["Z1", "ORP"], "out_orp": "true"}
-        if ctx and not ctx.is_admin:
-            filters["associateds_allowed"] = ctx.associated
-
-        plates = Plate.get_all(filters)
-
-        locais = []
-        for p in plates:
-            orp_atual = p.sensors_value.get("orp", 0) if p.sensors_value else 0
-            locais.append(
-                {
-                    "granja": p.farm_associated,
-                    "orp_atual": orp_atual,
-                    "serial": p.serial,
-                }
-            )
-
-        # CCD usa "Falha: ORP fora da faixa" nos readings
-        ccd_filters = {"plate_type": ["CCD"]}
-        if ctx and not ctx.is_admin:
-            ccd_filters["associateds_allowed"] = ctx.associated
-
-        ccd_plates = Plate.get_all(ccd_filters)
-        for p in ccd_plates:
-            sv = p.sensors_value
-            if sv and sv.get("Falha: ORP fora da faixa") == 1:
-                locais.append(
-                    {
-                        "granja": p.farm_associated,
-                        "orp_atual": sv.get("ORP", 0),
-                        "serial": p.serial,
-                    }
-                )
-
-        if not locais:
-            return {"total": 0, "mensagem": "Nenhum equipamento com ORP fora da faixa"}
-
-        return {
-            "total": len(locais),
-            "locais": locais,
-        }
-
-    except Exception as e:
-        log.error("Erro ao consultar ORP fora da faixa", error=str(e))
+        log.error("Erro ao consultar sensor fora da faixa", error=str(e))
         return {"erro": str(e)}
 
 
@@ -3225,16 +3151,16 @@ TOOLS_Z1 = [
         function=consultar_equipamentos_online,
     ),
     Tool(
-        name="consultar_falta_acido",
-        description="Lista equipamentos/locais com falta de ácido.",
-        parameters={"type": "object", "properties": {}, "required": []},
-        function=consultar_falta_acido,
-    ),
-    Tool(
-        name="consultar_falta_cloro",
-        description="Lista equipamentos/locais com falta de cloro.",
-        parameters={"type": "object", "properties": {}, "required": []},
-        function=consultar_falta_cloro,
+        name="consultar_falta_insumo",
+        description="Lista equipamentos com falta de insumo. Pode filtrar por ácido, cloro, ou todos.",
+        parameters={
+            "type": "object",
+            "properties": {
+                "insumo": {"type": "string", "description": "acido, cloro, ou todos (default: todos)", "default": "todos"},
+            },
+            "required": [],
+        },
+        function=consultar_falta_insumo,
     ),
     Tool(
         name="consultar_falta_gas",
@@ -3243,16 +3169,16 @@ TOOLS_Z1 = [
         function=consultar_falta_gas,
     ),
     Tool(
-        name="consultar_ph_fora_faixa",
-        description="Lista equipamentos com pH fora da faixa configurada.",
-        parameters={"type": "object", "properties": {}, "required": []},
-        function=consultar_ph_fora_faixa,
-    ),
-    Tool(
-        name="consultar_orp_fora_faixa",
-        description="Lista equipamentos com ORP fora da faixa configurada.",
-        parameters={"type": "object", "properties": {}, "required": []},
-        function=consultar_orp_fora_faixa,
+        name="consultar_sensor_fora_faixa",
+        description="Lista equipamentos com sensor fora da faixa configurada. Pode filtrar por pH, ORP, ou todos.",
+        parameters={
+            "type": "object",
+            "properties": {
+                "sensor": {"type": "string", "description": "ph, orp, ou todos (default: todos)", "default": "todos"},
+            },
+            "required": [],
+        },
+        function=consultar_sensor_fora_faixa,
     ),
     Tool(
         name="status_equipamento",

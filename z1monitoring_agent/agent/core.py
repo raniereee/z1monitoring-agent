@@ -17,7 +17,7 @@ log = structlog.get_logger()
 client = anthropic.Anthropic()
 
 # Configurações
-MAX_ITERATIONS = 10  # Evita loops infinitos
+MAX_ITERATIONS = 7  # Evita loops infinitos e gasto desnecessário de tokens
 MODEL = "claude-sonnet-4-20250514"
 
 
