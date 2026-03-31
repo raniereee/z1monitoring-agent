@@ -1403,115 +1403,82 @@ def mostrar_ajuda() -> dict:
         }
 
 
-def solicitar_suporte(equipamento: str = None, problema: str = None) -> dict:
+def suporte(acao: str = "solicitar", tipo_equipamento: str = None, topico: str = None, problema: str = None) -> dict:
     """
-    Inicia solicitação de suporte técnico.
+    Suporte técnico: solicitar atendimento, obter guia ou listar tópicos disponíveis.
 
     Args:
-        equipamento: Tipo de equipamento com problema (opcional)
-        problema: Descrição do problema (opcional)
+        acao: solicitar, guia, ou listar_topicos
+        tipo_equipamento: Tipo do equipamento (Z1, CCD, PHI, ORP, WGT, FLX, NVL, OZ1)
+        topico: Tópico do suporte (calibracao, offline, leitura, dosagem, config)
+        problema: Descrição do problema (para acao=solicitar)
 
     Returns:
-        Início do fluxo de suporte
+        Resultado da ação de suporte
     """
-    return {
-        "acao": "iniciar_suporte",
-        "equipamento": equipamento,
-        "problema": problema,
-        "mensagem": "Iniciando atendimento de suporte técnico",
-    }
-
-
-def obter_guia_suporte(tipo_equipamento: str, topico: str) -> dict:
-    """
-    Obtém guia de suporte com instruções e imagem para um tópico específico.
-
-    Args:
-        tipo_equipamento: Tipo do equipamento (Z1, CCD, PHI, ORP, WGT, FLX, NVL, OZ1, etc)
-        topico: Tópico do suporte (calibracao, offline, leitura, dosagem, etc)
-
-    Returns:
-        Guia com texto explicativo e URL da imagem
-    """
-    try:
-        from monitoring.whatsapp_steps_z1.support_guides_config import (
-            SUPPORT_GUIDES,
-            PLATE_TYPE_NAMES,
-            GUIDES_PUBLIC_URL,
-        )
-
-        # Monta o ID do guia
-        tipo_lower = tipo_equipamento.lower()
-        guide_id = f"{tipo_lower}_{topico}"
-
-        guide = SUPPORT_GUIDES.get(guide_id)
-        if not guide:
-            # Tenta variações comuns
-            alternativas = [
-                f"{tipo_lower}_outros",
-                f"{tipo_lower}_offline",
-            ]
-            for alt in alternativas:
-                if alt in SUPPORT_GUIDES:
-                    guide = SUPPORT_GUIDES[alt]
-                    guide_id = alt
-                    break
-
-        if not guide:
-            return {
-                "encontrado": False,
-                "mensagem": f"Guia não encontrado para {tipo_equipamento} - {topico}",
-                "topicos_disponiveis": ["calibracao", "offline", "leitura", "dosagem", "config"],
-            }
-
-        nome_equipamento = PLATE_TYPE_NAMES.get(tipo_equipamento.upper(), tipo_equipamento)
-
+    if acao == "solicitar":
         return {
-            "encontrado": True,
-            "equipamento": nome_equipamento,
-            "topico": topico,
-            "texto": guide.get("text", ""),
-            "imagem_url": f"{GUIDES_PUBLIC_URL}{guide.get('image', '')}" if guide.get("image") else None,
+            "acao": "iniciar_suporte",
+            "equipamento": tipo_equipamento,
+            "problema": problema,
+            "mensagem": "Iniciando atendimento de suporte técnico",
         }
 
-    except Exception as e:
-        log.error("Erro ao obter guia de suporte", error=str(e))
-        return {"erro": str(e)}
+    if acao == "listar_topicos":
+        try:
+            from monitoring.whatsapp_steps_z1.support_guides_config import (
+                SUPPORT_TOPICS,
+                PLATE_TYPE_NAMES,
+            )
+            if not tipo_equipamento:
+                return {"tipos_disponiveis": list(PLATE_TYPE_NAMES.keys())}
 
+            tipo_upper = tipo_equipamento.upper()
+            topicos = SUPPORT_TOPICS.get(tipo_upper, [])
+            if not topicos:
+                return {"encontrado": False, "tipos_disponiveis": list(PLATE_TYPE_NAMES.keys())}
 
-def listar_topicos_suporte(tipo_equipamento: str) -> dict:
-    """
-    Lista os tópicos de suporte disponíveis para um tipo de equipamento.
-
-    Args:
-        tipo_equipamento: Tipo do equipamento (Z1, CCD, PHI, ORP, WGT, FLX, NVL, etc)
-
-    Returns:
-        Lista de tópicos disponíveis
-    """
-    try:
-        from monitoring.whatsapp_steps_z1.support_guides_config import (
-            SUPPORT_TOPICS,
-            PLATE_TYPE_NAMES,
-        )
-
-        tipo_upper = tipo_equipamento.upper()
-        topicos = SUPPORT_TOPICS.get(tipo_upper, [])
-
-        if not topicos:
             return {
-                "encontrado": False,
-                "mensagem": f"Tipo de equipamento '{tipo_equipamento}' não encontrado",
-                "tipos_disponiveis": list(PLATE_TYPE_NAMES.keys()),
+                "encontrado": True,
+                "equipamento": PLATE_TYPE_NAMES.get(tipo_upper, tipo_equipamento),
+                "topicos": [{"id": t["id"], "nome": t["label"]} for t in topicos],
             }
+        except Exception as e:
+            return {"erro": str(e)}
 
-        nome_equipamento = PLATE_TYPE_NAMES.get(tipo_upper, tipo_equipamento)
+    if acao == "guia":
+        try:
+            from monitoring.whatsapp_steps_z1.support_guides_config import (
+                SUPPORT_GUIDES,
+                PLATE_TYPE_NAMES,
+                GUIDES_PUBLIC_URL,
+            )
+            if not tipo_equipamento or not topico:
+                return {"erro": "tipo_equipamento e topico são obrigatórios para acao=guia"}
 
-        return {
-            "encontrado": True,
-            "equipamento": nome_equipamento,
-            "topicos": [{"id": t["id"], "nome": t["label"]} for t in topicos],
-        }
+            tipo_lower = tipo_equipamento.lower()
+            guide_id = f"{tipo_lower}_{topico}"
+            guide = SUPPORT_GUIDES.get(guide_id)
+            if not guide:
+                for alt in [f"{tipo_lower}_outros", f"{tipo_lower}_offline"]:
+                    if alt in SUPPORT_GUIDES:
+                        guide = SUPPORT_GUIDES[alt]
+                        break
+
+            if not guide:
+                return {"encontrado": False, "topicos_disponiveis": ["calibracao", "offline", "leitura", "dosagem", "config"]}
+
+            return {
+                "encontrado": True,
+                "equipamento": PLATE_TYPE_NAMES.get(tipo_equipamento.upper(), tipo_equipamento),
+                "topico": topico,
+                "texto": guide.get("text", ""),
+                "imagem_url": f"{GUIDES_PUBLIC_URL}{guide.get('image', '')}" if guide.get("image") else None,
+            }
+        except Exception as e:
+            return {"erro": str(e)}
+
+    return {"erro": f"Ação '{acao}' não reconhecida. Use: solicitar, guia, listar_topicos"}
 
     except Exception as e:
         log.error("Erro ao listar tópicos de suporte", error=str(e))
@@ -3112,51 +3079,23 @@ TOOLS_Z1 = [
         function=mostrar_ajuda,
     ),
     Tool(
-        name="solicitar_suporte",
-        description="Inicia solicitação de suporte técnico para um equipamento ou problema.",
+        name="suporte",
+        description="Suporte técnico: solicitar atendimento, obter guia com instruções, ou listar tópicos disponíveis.",
         parameters={
             "type": "object",
             "properties": {
-                "equipamento": {"type": "string", "description": "Tipo de equipamento (opcional)"},
-                "problema": {"type": "string", "description": "Descrição do problema (opcional)"},
+                "acao": {
+                    "type": "string",
+                    "description": "solicitar, guia, ou listar_topicos (default: solicitar)",
+                    "default": "solicitar",
+                },
+                "tipo_equipamento": {"type": "string", "description": "Tipo do equipamento (Z1, CCD, PHI, ORP, WGT, FLX, NVL, OZ1)"},
+                "topico": {"type": "string", "description": "Tópico (calibracao, offline, leitura, dosagem, config)"},
+                "problema": {"type": "string", "description": "Descrição do problema (para acao=solicitar)"},
             },
             "required": [],
         },
-        function=solicitar_suporte,
-    ),
-    Tool(
-        name="obter_guia_suporte",
-        description="Obtém guia de suporte com instruções detalhadas e imagem para um tópico específico de equipamento.",
-        parameters={
-            "type": "object",
-            "properties": {
-                "tipo_equipamento": {
-                    "type": "string",
-                    "description": "Tipo do equipamento (Z1, CCD, PHI, ORP, WGT, FLX, NVL, OZ1)",
-                },
-                "topico": {
-                    "type": "string",
-                    "description": "Tópico (calibracao, offline, leitura, dosagem, config)",
-                },
-            },
-            "required": ["tipo_equipamento", "topico"],
-        },
-        function=obter_guia_suporte,
-    ),
-    Tool(
-        name="listar_topicos_suporte",
-        description="Lista os tópicos de suporte disponíveis para um tipo de equipamento.",
-        parameters={
-            "type": "object",
-            "properties": {
-                "tipo_equipamento": {
-                    "type": "string",
-                    "description": "Tipo do equipamento (Z1, CCD, PHI, ORP, WGT, FLX, NVL, OZ1)",
-                },
-            },
-            "required": ["tipo_equipamento"],
-        },
-        function=listar_topicos_suporte,
+        function=suporte,
     ),
     # ===== DADOS E RELATÓRIOS =====
     Tool(
