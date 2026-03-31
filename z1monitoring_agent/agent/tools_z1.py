@@ -135,13 +135,17 @@ def consultar_alarmes(granja: str = None, dias: int = 1) -> dict:
 
 def consultar_equipamentos_offline() -> dict:
     """
-    Lista todos os equipamentos que estão offline (sem comunicação).
+    Lista todos os equipamentos que estão offline (sem comunicação),
+    com data do último dado recebido.
 
     Returns:
-        Lista de equipamentos offline
+        Lista de equipamentos offline ordenados por tempo offline
     """
     ctx = get_user_context()
     try:
+        from z1monitoring_models.models.events_last import LastEvent
+        from datetime import datetime
+
         filters = {"have_communication": False}
         if ctx and not ctx.is_admin:
             filters["associateds_allowed"] = ctx.associated
@@ -151,21 +155,32 @@ def consultar_equipamentos_offline() -> dict:
         if not plates:
             return {"total": 0, "mensagem": "Nenhum equipamento offline no momento"}
 
+        now = datetime.now()
         equipamentos = []
-        for plate in plates[:20]:
+        for plate in plates:
+            last = LastEvent.get_last_register(plate.owner, plate.serial)
+            ultimo_contato = last.updated_at if last else None
+
+            dias_offline = 0
+            if ultimo_contato:
+                dias_offline = (now - ultimo_contato).days
+
             equipamentos.append(
                 {
                     "serial": plate.serial,
                     "tipo": plate.plate_type,
                     "granja": plate.farm_associated,
-                    "ultimo_contato": plate.updated_at.strftime("%d/%m %H:%M") if plate.updated_at else None,
+                    "ultimo_contato": ultimo_contato.strftime("%d/%m/%Y %H:%M") if ultimo_contato else "desconhecido",
+                    "dias_offline": dias_offline,
                 }
             )
 
+        equipamentos.sort(key=lambda x: x["dias_offline"], reverse=True)
+
         return {
-            "total": len(plates),
-            "mostrando": len(equipamentos),
-            "equipamentos": equipamentos,
+            "total": len(equipamentos),
+            "mostrando": min(len(equipamentos), 30),
+            "equipamentos": equipamentos[:30],
         }
 
     except Exception as e:
@@ -2905,7 +2920,7 @@ def ranking_offline(dias: int = 30, gap_minutos: int = 15) -> dict:
 
         # Buscar granjas do usuário
         if ctx and ctx.is_admin:
-            farms = Farm.get_all({})
+            farms = Farm.get_all_farms_obj()
         elif ctx:
             farms = Farm.get_all_farms_objs_filtereds({"owner": ctx.associated})
         else:
@@ -2947,6 +2962,139 @@ def ranking_offline(dias: int = 30, gap_minutos: int = 15) -> dict:
 
     except Exception as e:
         log.error("Erro no ranking offline", error=str(e))
+        return {"erro": str(e)}
+
+
+def saude_empresa(empresa: str, problema: str = "todos", dias_minimo: int = 0) -> dict:
+    """
+    Verifica a saúde das granjas de uma empresa.
+    Identifica: placas offline, sem ácido, sem cloro, pH/ORP fora da faixa, ABS desativados.
+    Mostra há quantos dias cada problema está ativo.
+
+    Args:
+        empresa: Nome da empresa/cliente primário
+        problema: offline, sem_acido, sem_cloro, ph_fora, orp_fora, abs_manual, todos
+        dias_minimo: Filtrar apenas problemas com mais de X dias
+
+    Returns:
+        Lista de problemas ativos por granja
+    """
+    ctx = get_user_context()
+    try:
+        from z1monitoring_models.models.events_last import LastEvent
+        from z1monitoring_models.models.critical_history import CriticalHistory
+        from z1monitoring_models.models.plates_state import PlateState
+        from z1monitoring_models.models.clients_secondary import ClientSecondary
+        from z1monitoring_models.models.clients_primary import ClientPrimary
+        from datetime import datetime
+
+        now = datetime.now()
+
+        # Buscar granjas da empresa
+        pc = ClientPrimary.get_primary_like_name(empresa)
+        if not pc:
+            return {"erro": f"Empresa '{empresa}' nao encontrada"}
+
+        secondaries = ClientSecondary.get_all({"associateds_allowed": pc.cnpj})
+        farms = []
+        for sc in secondaries:
+            sc_farms = Farm.get_all_farms_objs_filtereds({"owner": sc.identification})
+            farms.extend(sc_farms)
+
+        if not farms:
+            return {"erro": "Nenhuma granja encontrada para esta empresa"}
+
+        resultados = []
+
+        for farm in farms:
+            plates = Plate.get_all_plates_filtered(farm_id=farm.id)
+            if not plates:
+                continue
+
+            for plate in plates:
+                problemas_placa = []
+
+                # OFFLINE
+                if problema in ("offline", "todos"):
+                    state = PlateState.load(plate.serial)
+                    if state and not state.have_communication:
+                        last = LastEvent.get_last_register(plate.owner, plate.serial)
+                        ultimo = last.updated_at if last else None
+                        dias_off = (now - ultimo).days if ultimo else 999
+                        if dias_off >= dias_minimo:
+                            problemas_placa.append({
+                                "tipo": "offline",
+                                "desde": ultimo.strftime("%d/%m/%Y") if ultimo else "desconhecido",
+                                "dias": dias_off,
+                            })
+
+                # SEM ÁCIDO / SEM CLORO / PH FORA / ORP FORA via CriticalHistory
+                if problema in ("sem_acido", "sem_cloro", "ph_fora", "orp_fora", "todos"):
+                    sensor_map = {
+                        "sem_acido": "Ácido",
+                        "sem_cloro": "Cloro",
+                        "ph_fora": "pH",
+                        "orp_fora": "ORP",
+                    }
+                    sensors_to_check = [problema] if problema != "todos" else list(sensor_map.keys())
+
+                    for prob in sensors_to_check:
+                        sensor_name = sensor_map[prob]
+                        active = CriticalHistory.get_active_by_serial(plate.serial, sensor_name)
+                        if not active:
+                            active = CriticalHistory.get_active_by_serial(plate.serial, f"Falha: {sensor_name} fora da faixa")
+                        if not active:
+                            active = CriticalHistory.get_active_by_serial(plate.serial, f"Falha: PH fora da faixa" if prob == "ph_fora" else "")
+                        if active:
+                            dias_prob = (now - active.created_at).days
+                            if dias_prob >= dias_minimo:
+                                problemas_placa.append({
+                                    "tipo": prob,
+                                    "desde": active.created_at.strftime("%d/%m/%Y"),
+                                    "dias": dias_prob,
+                                })
+
+                # ABS MANUAL (último reading da CCD)
+                if problema in ("abs_manual", "todos") and plate.plate_type == "CCD":
+                    sv = plate.sensors_value
+                    if sv:
+                        abs_items = []
+                        if sv.get("ABS Ácido Desarmado Manualmente") == 0:
+                            abs_items.append("Ácido")
+                        if sv.get("ABS Cloro Desarmado Manualmente") == 0:
+                            abs_items.append("Cloro")
+                        if abs_items:
+                            problemas_placa.append({
+                                "tipo": "abs_manual",
+                                "descricao": f"ABS liberado: {', '.join(abs_items)}",
+                            })
+
+                if problemas_placa:
+                    resultados.append({
+                        "granja": farm.name,
+                        "serial": plate.serial,
+                        "tipo_placa": plate.plate_type,
+                        "problemas": problemas_placa,
+                    })
+
+        if not resultados:
+            msg = "Nenhum problema encontrado"
+            if dias_minimo:
+                msg += f" com mais de {dias_minimo} dias"
+            return {"empresa": pc.fantasy_name, "mensagem": msg}
+
+        resultados.sort(key=lambda x: max((p.get("dias", 0) for p in x["problemas"]), default=0), reverse=True)
+
+        return {
+            "empresa": pc.fantasy_name,
+            "total_com_problema": len(resultados),
+            "filtro": problema,
+            "dias_minimo": dias_minimo,
+            "resultados": resultados[:30],
+        }
+
+    except Exception as e:
+        log.error("Erro em saude_empresa", error=str(e))
         return {"erro": str(e)}
 
 
@@ -3758,6 +3906,32 @@ TOOLS_Z1 = [
             "required": [],
         },
         function=ranking_offline,
+    ),
+    # ===== SAÚDE DA EMPRESA =====
+    Tool(
+        name="saude_empresa",
+        description="Verifica a saúde das granjas de uma empresa. "
+                    "Identifica placas offline, sem ácido, sem cloro, pH/ORP fora da faixa, ABS desativados. "
+                    "Mostra há quantos dias cada problema está ativo. "
+                    "Use quando perguntarem sobre problemas de uma empresa, quantas granjas com problema, etc.",
+        parameters={
+            "type": "object",
+            "properties": {
+                "empresa": {"type": "string", "description": "Nome da empresa/cliente primário"},
+                "problema": {
+                    "type": "string",
+                    "description": "Tipo de problema: offline, sem_acido, sem_cloro, ph_fora, orp_fora, abs_manual, todos",
+                    "default": "todos",
+                },
+                "dias_minimo": {
+                    "type": "integer",
+                    "description": "Filtrar problemas com mais de X dias (default: 0 = todos)",
+                    "default": 0,
+                },
+            },
+            "required": ["empresa"],
+        },
+        function=saude_empresa,
     ),
     # ===== ANÁLISE DE PERÍODOS OFFLINE =====
     Tool(
