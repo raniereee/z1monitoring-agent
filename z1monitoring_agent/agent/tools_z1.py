@@ -925,80 +925,44 @@ def listar_granjas_usuario() -> dict:
 # =============================================================================
 
 
-def ajustar_ph(granja: str, ph_min: float, ph_max: float) -> dict:
+def ajustar_faixa(granja: str, sensor: str, valor_min: float, valor_max: float) -> dict:
     """
-    Ajusta a faixa de pH de uma granja.
+    Ajusta a faixa de um sensor (pH ou ORP) de uma granja.
 
     Args:
         granja: Nome da granja
-        ph_min: Valor mínimo de pH (ex: 6.5)
-        ph_max: Valor máximo de pH (ex: 7.5)
+        sensor: ph ou orp
+        valor_min: Valor mínimo (ex: 6.5 para pH, 650 para ORP)
+        valor_max: Valor máximo (ex: 7.5 para pH, 750 para ORP)
 
     Returns:
         Confirmação do ajuste solicitado
     """
     try:
-        # Validações
-        if ph_min >= ph_max:
-            return {"erro": "pH mínimo deve ser menor que o máximo"}
+        if valor_min >= valor_max:
+            return {"erro": f"{sensor} mínimo deve ser menor que o máximo"}
 
-        if ph_min < 0 or ph_max > 14:
+        if sensor == "ph" and (valor_min < 0 or valor_max > 14):
             return {"erro": "pH deve estar entre 0 e 14"}
+        if sensor == "orp" and (valor_min < 0 or valor_max > 1500):
+            return {"erro": "ORP deve estar entre 0 e 1500 mV"}
 
         farm = Farm.get_farm_like_sensibility(granja)
         if not farm:
             return {"erro": f"Granja '{granja}' não encontrada"}
 
-        # Retorna confirmação para o agente solicitar ao usuário
+        unidade = " mV" if sensor == "orp" else ""
         return {
-            "acao": "ajuste_ph",
+            "acao": f"ajuste_{sensor}",
             "granja": farm.name,
-            "ph_min": ph_min,
-            "ph_max": ph_max,
+            f"{sensor}_min": valor_min,
+            f"{sensor}_max": valor_max,
             "requer_confirmacao": True,
-            "mensagem": f"Confirma ajuste de pH para {ph_min} - {ph_max} em {farm.name}?",
+            "mensagem": f"Confirma ajuste de {sensor.upper()} para {valor_min} - {valor_max}{unidade} em {farm.name}?",
         }
 
     except Exception as e:
-        log.error("Erro ao ajustar pH", error=str(e))
-        return {"erro": str(e)}
-
-
-def ajustar_orp(granja: str, orp_min: int, orp_max: int) -> dict:
-    """
-    Ajusta a faixa de ORP de uma granja.
-
-    Args:
-        granja: Nome da granja
-        orp_min: Valor mínimo de ORP em mV (ex: 650)
-        orp_max: Valor máximo de ORP em mV (ex: 750)
-
-    Returns:
-        Confirmação do ajuste solicitado
-    """
-    try:
-        # Validações
-        if orp_min >= orp_max:
-            return {"erro": "ORP mínimo deve ser menor que o máximo"}
-
-        if orp_min < 0 or orp_max > 1000:
-            return {"erro": "ORP deve estar entre 0 e 1000 mV"}
-
-        farm = Farm.get_farm_like_sensibility(granja)
-        if not farm:
-            return {"erro": f"Granja '{granja}' não encontrada"}
-
-        return {
-            "acao": "ajuste_orp",
-            "granja": farm.name,
-            "orp_min": orp_min,
-            "orp_max": orp_max,
-            "requer_confirmacao": True,
-            "mensagem": f"Confirma ajuste de ORP para {orp_min} - {orp_max} mV em {farm.name}?",
-        }
-
-    except Exception as e:
-        log.error("Erro ao ajustar ORP", error=str(e))
+        log.error("Erro ao ajustar faixa", error=str(e))
         return {"erro": str(e)}
 
 
@@ -1486,18 +1450,53 @@ def suporte(acao: str = "solicitar", tipo_equipamento: str = None, topico: str =
 # =============================================================================
 
 
-def consultar_historico_consumo(granja: str, dias: int = 7) -> dict:
+def consumo(granja: str, dias: int = 7, formato: str = "dados") -> dict:
     """
-    Consulta histórico de consumo diário de ácido, cloro e água de uma granja.
-    Retorna os dados numéricos por dia para análise (sem gerar gráfico).
+    Consulta consumo de ácido, cloro e água de uma granja.
 
     Args:
         granja: Nome da granja
         dias: Período em dias (default: 7, máximo: 90)
+        formato: dados (retorna números) ou grafico (gera imagem e envia ao usuário)
 
     Returns:
-        Dados de consumo por dia com totais
+        Dados de consumo ou confirmação de gráfico gerado
     """
+    if formato == "grafico":
+        try:
+            from z1monitoring_agent.utils import commons_actions
+
+            farm = Farm.get_farm_like_sensibility(granja)
+            if not farm:
+                return {"erro": f"Granja '{granja}' não encontrada"}
+
+            if dias < 1 or dias > 90:
+                return {"erro": "Período deve ser entre 1 e 90 dias"}
+
+            plates = Plate.get_all({"farm_associated": farm.name})
+            if not plates:
+                return {"erro": f"Nenhum equipamento encontrado em '{farm.name}'"}
+
+            result = commons_actions.handler_graphic_request(farm, plates, dias)
+            if not result:
+                return {"erro": f"Não foi possível gerar gráficos para '{farm.name}'"}
+
+            ctx = get_user_context()
+            if ctx:
+                for msg in result:
+                    if msg.get("type") in ["image", "image_upload"]:
+                        ctx.pending_messages.append(msg)
+
+            qtd = len([m for m in result if m.get("type") in ["image", "image_upload"]])
+            return {
+                "granja": farm.name,
+                "dias": dias,
+                "graficos_gerados": qtd,
+                "mensagem": f"{qtd} gráfico(s) de consumo gerado(s) para {farm.name} ({dias} dias). As imagens serão enviadas ao usuário.",
+            }
+        except Exception as e:
+            log.error("Erro ao gerar gráfico", error=str(e))
+            return {"erro": str(e)}
     try:
         import datetime
         from datetime import timedelta
@@ -1602,57 +1601,6 @@ def consultar_historico_consumo(granja: str, dias: int = 7) -> dict:
 
     except Exception as e:
         log.error("Erro ao consultar histórico de consumo", error=str(e))
-        return {"erro": str(e)}
-
-
-def gerar_grafico_consumo(granja: str, dias: int = 7) -> dict:
-    """
-    Gera gráfico de consumo para uma granja.
-    Os gráficos (imagens) são enfileirados para envio direto ao usuário.
-
-    Args:
-        granja: Nome da granja
-        dias: Período em dias (default: 7)
-
-    Returns:
-        Confirmação de que os gráficos foram gerados
-    """
-    try:
-        from z1monitoring_agent.utils import commons_actions
-
-        farm = Farm.get_farm_like_sensibility(granja)
-        if not farm:
-            return {"erro": f"Granja '{granja}' não encontrada"}
-
-        if dias < 1 or dias > 90:
-            return {"erro": "Período deve ser entre 1 e 90 dias"}
-
-        plates = Plate.get_all({"farm_associated": farm.name})
-        if not plates:
-            return {"erro": f"Nenhum equipamento encontrado em '{farm.name}'"}
-
-        result = commons_actions.handler_graphic_request(farm, plates, dias)
-
-        if not result:
-            return {"erro": f"Não foi possível gerar gráficos para '{farm.name}'"}
-
-        # Enfileira as imagens para envio direto (não passam pelo texto do agente)
-        ctx = get_user_context()
-        if ctx:
-            for msg in result:
-                if msg.get("type") in ["image", "image_upload"]:
-                    ctx.pending_messages.append(msg)
-
-        qtd = len([m for m in result if m.get("type") in ["image", "image_upload"]])
-        return {
-            "granja": farm.name,
-            "dias": dias,
-            "graficos_gerados": qtd,
-            "mensagem": f"{qtd} gráfico(s) de consumo gerado(s) para {farm.name} ({dias} dias). As imagens serão enviadas ao usuário.",
-        }
-
-    except Exception as e:
-        log.error("Erro ao gerar gráfico", error=str(e))
         return {"erro": str(e)}
 
 
@@ -1826,13 +1774,14 @@ def panorama_24h(granja: str = None) -> dict:
 # =============================================================================
 
 
-def ligar_saida(granja: str, saida: str) -> dict:
+def controlar_saida(granja: str, saida: str, acao: str) -> dict:
     """
-    Liga uma saída (bomba, válvula, motor, etc).
+    Liga ou desliga uma saída (bomba, válvula, motor, etc).
 
     Args:
         granja: Nome da granja
         saida: Nome da saída (bomba, valvula, motor, ventilador, etc)
+        acao: ligar ou desligar
 
     Returns:
         Confirmação da ação solicitada
@@ -1843,44 +1792,15 @@ def ligar_saida(granja: str, saida: str) -> dict:
             return {"erro": f"Granja '{granja}' não encontrada"}
 
         return {
-            "acao": "ligar_saida",
+            "acao": f"{acao}_saida",
             "granja": farm.name,
             "saida": saida,
             "requer_confirmacao": True,
-            "mensagem": f"Confirma LIGAR {saida} em {farm.name}?",
+            "mensagem": f"Confirma {acao.upper()} {saida} em {farm.name}?",
         }
 
     except Exception as e:
-        log.error("Erro ao ligar saída", error=str(e))
-        return {"erro": str(e)}
-
-
-def desligar_saida(granja: str, saida: str) -> dict:
-    """
-    Desliga uma saída (bomba, válvula, motor, etc).
-
-    Args:
-        granja: Nome da granja
-        saida: Nome da saída (bomba, valvula, motor, ventilador, etc)
-
-    Returns:
-        Confirmação da ação solicitada
-    """
-    try:
-        farm = Farm.get_farm_like_sensibility(granja)
-        if not farm:
-            return {"erro": f"Granja '{granja}' não encontrada"}
-
-        return {
-            "acao": "desligar_saida",
-            "granja": farm.name,
-            "saida": saida,
-            "requer_confirmacao": True,
-            "mensagem": f"Confirma DESLIGAR {saida} em {farm.name}?",
-        }
-
-    except Exception as e:
-        log.error("Erro ao desligar saída", error=str(e))
+        log.error("Erro ao controlar saída", error=str(e))
         return {"erro": str(e)}
 
 
@@ -1932,61 +1852,34 @@ def consultar_quadros_com_problema() -> dict:
 # =============================================================================
 
 
-def iniciar_lote(granja: str, galpao: str = None) -> dict:
+def controlar_lote(granja: str, acao: str, galpao: str = None) -> dict:
     """
-    Inicia um novo lote em uma granja/galpão.
+    Inicia ou finaliza um lote em uma granja/galpão.
 
     Args:
         granja: Nome da granja
+        acao: iniciar ou finalizar
         galpao: Nome do galpão (opcional)
 
     Returns:
-        Solicitação de início de lote
+        Solicitação de controle de lote
     """
     try:
         farm = Farm.get_farm_like_sensibility(granja)
         if not farm:
             return {"erro": f"Granja '{granja}' não encontrada"}
 
+        label = "início" if acao == "iniciar" else "fim"
         return {
-            "acao": "iniciar_lote",
+            "acao": f"{acao}_lote",
             "granja": farm.name,
             "galpao": galpao,
             "requer_confirmacao": True,
-            "mensagem": f"Confirma início de lote em {farm.name}" + (f" - {galpao}" if galpao else "") + "?",
+            "mensagem": f"Confirma {label} de lote em {farm.name}" + (f" - {galpao}" if galpao else "") + "?",
         }
 
     except Exception as e:
-        log.error("Erro ao iniciar lote", error=str(e))
-        return {"erro": str(e)}
-
-
-def finalizar_lote(granja: str, galpao: str = None) -> dict:
-    """
-    Finaliza um lote em uma granja/galpão.
-
-    Args:
-        granja: Nome da granja
-        galpao: Nome do galpão (opcional)
-
-    Returns:
-        Solicitação de finalização de lote
-    """
-    try:
-        farm = Farm.get_farm_like_sensibility(granja)
-        if not farm:
-            return {"erro": f"Granja '{granja}' não encontrada"}
-
-        return {
-            "acao": "finalizar_lote",
-            "granja": farm.name,
-            "galpao": galpao,
-            "requer_confirmacao": True,
-            "mensagem": f"Confirma fim de lote em {farm.name}" + (f" - {galpao}" if galpao else "") + "?",
-        }
-
-    except Exception as e:
-        log.error("Erro ao finalizar lote", error=str(e))
+        log.error("Erro ao controlar lote", error=str(e))
         return {"erro": str(e)}
 
 
@@ -2911,32 +2804,19 @@ TOOLS_Z1 = [
     ),
     # ===== CONTROLE =====
     Tool(
-        name="ajustar_ph",
-        description="Ajusta a faixa de pH de uma granja. Requer confirmação do usuário.",
+        name="ajustar_faixa",
+        description="Ajusta a faixa de pH ou ORP de uma granja. Requer confirmação do usuário.",
         parameters={
             "type": "object",
             "properties": {
                 "granja": {"type": "string", "description": "Nome da granja"},
-                "ph_min": {"type": "number", "description": "Valor mínimo de pH (ex: 6.5)"},
-                "ph_max": {"type": "number", "description": "Valor máximo de pH (ex: 7.5)"},
+                "sensor": {"type": "string", "description": "ph ou orp"},
+                "valor_min": {"type": "number", "description": "Valor mínimo (ex: 6.5 para pH, 650 para ORP)"},
+                "valor_max": {"type": "number", "description": "Valor máximo (ex: 7.5 para pH, 750 para ORP)"},
             },
-            "required": ["granja", "ph_min", "ph_max"],
+            "required": ["granja", "sensor", "valor_min", "valor_max"],
         },
-        function=ajustar_ph,
-    ),
-    Tool(
-        name="ajustar_orp",
-        description="Ajusta a faixa de ORP de uma granja. Requer confirmação do usuário.",
-        parameters={
-            "type": "object",
-            "properties": {
-                "granja": {"type": "string", "description": "Nome da granja"},
-                "orp_min": {"type": "integer", "description": "Valor mínimo de ORP em mV (ex: 650)"},
-                "orp_max": {"type": "integer", "description": "Valor máximo de ORP em mV (ex: 750)"},
-            },
-            "required": ["granja", "orp_min", "orp_max"],
-        },
-        function=ajustar_orp,
+        function=ajustar_faixa,
     ),
     Tool(
         name="controlar_dosadora",
@@ -3095,30 +2975,18 @@ TOOLS_Z1 = [
     ),
     # ===== DADOS E RELATÓRIOS =====
     Tool(
-        name="consultar_historico_consumo",
-        description="Consulta histórico de consumo diário de ácido, cloro e água de uma granja. Retorna dados numéricos por dia com totais e médias para análise. Use esta tool quando o usuário pedir análise de consumo, comparações ou verificar se o consumo faz sentido.",
+        name="consumo",
+        description="Consulta consumo de ácido, cloro e água de uma granja. Formato 'dados' retorna números por dia. Formato 'grafico' gera imagem e envia ao usuário.",
         parameters={
             "type": "object",
             "properties": {
                 "granja": {"type": "string", "description": "Nome da granja"},
                 "dias": {"type": "integer", "description": "Período em dias (default: 7, máximo: 90)", "default": 7},
+                "formato": {"type": "string", "description": "dados ou grafico (default: dados)", "default": "dados"},
             },
             "required": ["granja"],
         },
-        function=consultar_historico_consumo,
-    ),
-    Tool(
-        name="gerar_grafico_consumo",
-        description="Gera gráfico de consumo de uma granja para um período específico.",
-        parameters={
-            "type": "object",
-            "properties": {
-                "granja": {"type": "string", "description": "Nome da granja"},
-                "dias": {"type": "integer", "description": "Período em dias (default: 7)", "default": 7},
-            },
-            "required": ["granja"],
-        },
-        function=gerar_grafico_consumo,
+        function=consumo,
     ),
     Tool(
         name="relatorio_consumo_gas",
@@ -3164,30 +3032,18 @@ TOOLS_Z1 = [
     ),
     # ===== CONTROLE DE SAÍDAS =====
     Tool(
-        name="ligar_saida",
-        description="Liga uma saída física (bomba, válvula, motor, ventilador). Requer confirmação.",
+        name="controlar_saida",
+        description="Liga ou desliga uma saída física (bomba, válvula, motor, ventilador). Requer confirmação.",
         parameters={
             "type": "object",
             "properties": {
                 "granja": {"type": "string", "description": "Nome da granja"},
                 "saida": {"type": "string", "description": "Nome da saída (bomba, valvula, motor, etc)"},
+                "acao": {"type": "string", "description": "ligar ou desligar"},
             },
-            "required": ["granja", "saida"],
+            "required": ["granja", "saida", "acao"],
         },
-        function=ligar_saida,
-    ),
-    Tool(
-        name="desligar_saida",
-        description="Desliga uma saída física (bomba, válvula, motor, ventilador). Requer confirmação.",
-        parameters={
-            "type": "object",
-            "properties": {
-                "granja": {"type": "string", "description": "Nome da granja"},
-                "saida": {"type": "string", "description": "Nome da saída (bomba, valvula, motor, etc)"},
-            },
-            "required": ["granja", "saida"],
-        },
-        function=desligar_saida,
+        function=controlar_saida,
     ),
     Tool(
         name="consultar_quadros_com_problema",
@@ -3197,30 +3053,18 @@ TOOLS_Z1 = [
     ),
     # ===== LOTES =====
     Tool(
-        name="iniciar_lote",
-        description="Inicia um novo lote em uma granja/galpão. Usado no início de cada ciclo de produção.",
+        name="controlar_lote",
+        description="Inicia ou finaliza um lote em uma granja/galpão.",
         parameters={
             "type": "object",
             "properties": {
                 "granja": {"type": "string", "description": "Nome da granja"},
+                "acao": {"type": "string", "description": "iniciar ou finalizar"},
                 "galpao": {"type": "string", "description": "Nome do galpão (opcional)"},
             },
-            "required": ["granja"],
+            "required": ["granja", "acao"],
         },
-        function=iniciar_lote,
-    ),
-    Tool(
-        name="finalizar_lote",
-        description="Finaliza um lote em uma granja/galpão. Usado no fim de cada ciclo de produção.",
-        parameters={
-            "type": "object",
-            "properties": {
-                "granja": {"type": "string", "description": "Nome da granja"},
-                "galpao": {"type": "string", "description": "Nome do galpão (opcional)"},
-            },
-            "required": ["granja"],
-        },
-        function=finalizar_lote,
+        function=controlar_lote,
     ),
     # ===== REGISTRO DE VISITA =====
     Tool(
