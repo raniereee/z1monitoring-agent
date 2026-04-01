@@ -454,114 +454,73 @@ def tempo_real(granja: str, sensor: str = "geral") -> dict:
 # =============================================================================
 
 
-def analise_agua(granja: str) -> dict:
+def analise(granja: str, tipo: str = "agua") -> dict:
     """
-    Faz análise completa da qualidade da água de uma granja.
+    Faz análise de uma granja.
 
     Args:
         granja: Nome da granja
+        tipo: agua (pH, ORP, temperatura) ou gas (nível, consumo, autonomia)
 
     Returns:
-        Análise da água com pH, ORP, temperatura
+        Análise do tipo solicitado
     """
     try:
         farm = Farm.get_farm_like_sensibility(granja)
         if not farm:
             return {"erro": f"Granja '{granja}' não encontrada"}
 
-        plates = Plate.get_all(
-            {
-                "farm_associated": farm.name,
-                "plate_type": ["Z1", "PHI", "ORP"],
-            }
-        )
+        if tipo == "gas":
+            from z1monitoring_agent.utils import commons_actions
+            plates = Plate.get_all({"farm_associated": farm.name})
+            if not plates:
+                return {"erro": f"Nenhum equipamento encontrado em '{farm.name}'"}
+            resultado = commons_actions.handler_tempo_real_gas(farm, plates)
+            return {"granja": farm.name, "mensagem": resultado}
 
+        # tipo == "agua"
+        plates = Plate.get_all({"farm_associated": farm.name, "plate_type": ["Z1", "PHI", "ORP", "CCD"]})
         if not plates:
             return {"erro": f"Nenhum sensor de água encontrado em '{farm.name}'"}
 
-        analise = {
-            "granja": farm.name,
-            "ph": None,
-            "orp": None,
-            "temperatura": None,
-            "status_geral": "ok",
-            "alertas": [],
-        }
+        result = {"granja": farm.name, "ph": None, "orp": None, "temperatura": None, "status_geral": "ok", "alertas": []}
 
         for plate in plates:
-            if not plate.sensors_value:
+            sv = plate.sensors_value
+            if not sv:
                 continue
 
-            # pH
-            if "ph" in plate.sensors_value and analise["ph"] is None:
-                ph = plate.sensors_value.get("ph")
-                ph_min = plate.sensors_value.get("ph_min", 6.5)
-                ph_max = plate.sensors_value.get("ph_max", 7.5)
-                analise["ph"] = {
-                    "valor": ph,
-                    "minimo": ph_min,
-                    "maximo": ph_max,
-                    "na_faixa": ph_min <= ph <= ph_max if ph else False,
-                }
-                if not analise["ph"]["na_faixa"]:
-                    analise["alertas"].append(f"pH fora da faixa: {ph}")
-                    analise["status_geral"] = "alerta"
+            if result["ph"] is None:
+                ph = sv.get("ph") or sv.get("PH")
+                if ph is not None:
+                    ph_min = sv.get("ph_min") or sv.get("pH Alvo Inferior", 6.5)
+                    ph_max = sv.get("ph_max") or sv.get("pH Alvo Superior", 7.5)
+                    na_faixa = float(ph_min) <= float(ph) <= float(ph_max)
+                    result["ph"] = {"valor": ph, "minimo": ph_min, "maximo": ph_max, "na_faixa": na_faixa}
+                    if not na_faixa:
+                        result["alertas"].append(f"pH fora da faixa: {ph}")
+                        result["status_geral"] = "alerta"
 
-            # ORP
-            if "orp" in plate.sensors_value and analise["orp"] is None:
-                orp = plate.sensors_value.get("orp")
-                orp_min = plate.sensors_value.get("orp_min", 650)
-                orp_max = plate.sensors_value.get("orp_max", 750)
-                analise["orp"] = {
-                    "valor": orp,
-                    "minimo": orp_min,
-                    "maximo": orp_max,
-                    "na_faixa": orp_min <= orp <= orp_max if orp else False,
-                }
-                if not analise["orp"]["na_faixa"]:
-                    analise["alertas"].append(f"ORP fora da faixa: {orp}")
-                    analise["status_geral"] = "alerta"
+            if result["orp"] is None:
+                orp = sv.get("orp") or sv.get("ORP")
+                if orp is not None:
+                    orp_min = sv.get("orp_min") or sv.get("ORP Alvo Inferior", 650)
+                    orp_max = sv.get("orp_max") or sv.get("ORP Alvo Superior", 750)
+                    na_faixa = float(orp_min) <= float(orp) <= float(orp_max)
+                    result["orp"] = {"valor": orp, "minimo": orp_min, "maximo": orp_max, "na_faixa": na_faixa}
+                    if not na_faixa:
+                        result["alertas"].append(f"ORP fora da faixa: {orp}")
+                        result["status_geral"] = "alerta"
 
-            # Temperatura
-            if "temperature" in plate.sensors_value and analise["temperatura"] is None:
-                analise["temperatura"] = plate.sensors_value.get("temperature")
+            if result["temperatura"] is None:
+                temp = sv.get("temperature") or sv.get("Temperatura da Água")
+                if temp is not None:
+                    result["temperatura"] = temp
 
-        return analise
+        return result
 
     except Exception as e:
-        log.error("Erro na análise de água", error=str(e))
-        return {"erro": str(e)}
-
-
-def analise_gas(granja: str) -> dict:
-    """
-    Faz análise do consumo e nível de gás de uma granja.
-
-    Args:
-        granja: Nome da granja
-
-    Returns:
-        Análise do gás com nível, consumo e autonomia
-    """
-    try:
-        from z1monitoring_agent.utils import commons_actions
-
-        farm = Farm.get_farm_like_sensibility(granja)
-        if not farm:
-            return {"erro": f"Granja '{granja}' não encontrada"}
-
-        plates = Plate.get_all({"farm_associated": farm.name})
-
-        if not plates:
-            return {"erro": f"Nenhum equipamento encontrado em '{farm.name}'"}
-
-        # Usa handler existente (mesmo que tempo_real_gas)
-        resultado = commons_actions.handler_tempo_real_gas(farm, plates)
-
-        return {"granja": farm.name, "mensagem": resultado}
-
-    except Exception as e:
-        log.error("Erro na análise de gás", error=str(e))
+        log.error("Erro na análise", error=str(e))
         return {"erro": str(e)}
 
 
@@ -1002,19 +961,17 @@ def controlar_dosadora(granja: str, dosadora: str, acao: str) -> dict:
         return {"erro": str(e)}
 
 
-def liberar_injecao(granja: str, dosadora: str) -> dict:
+def controlar_abs(granja: str, dosadora: str, acao: str) -> dict:
     """
-    Libera injeção de ácido ou cloro quando o limite 24h foi atingido (ABS).
-
-    O sistema possui um freio automático (ABS) que bloqueia a injeção
-    quando o consumo de 24h é ultrapassado. Esta função libera manualmente.
+    Controla o ABS (freio automático de limite 24h) de ácido ou cloro.
 
     Args:
         granja: Nome da granja
-        dosadora: Tipo da dosadora ("acido" ou "cloro")
+        dosadora: acido ou cloro
+        acao: liberar (desativa freio, permite injeção) ou rearmar (reativa freio automático)
 
     Returns:
-        Confirmação da liberação solicitada
+        Confirmação da ação solicitada
     """
     try:
         if dosadora not in ["acido", "cloro"]:
@@ -1024,16 +981,30 @@ def liberar_injecao(granja: str, dosadora: str) -> dict:
         if not farm:
             return {"erro": f"Granja '{granja}' não encontrada"}
 
-        return {
-            "acao": f"liberar_abs_{dosadora}",
-            "granja": farm.name,
-            "dosadora": dosadora,
-            "requer_confirmacao": True,
-            "mensagem": f"Confirma liberar injeção de {dosadora} em {farm.name}? (override do limite 24h)",
-        }
+        if acao == "liberar":
+            return {
+                "acao": f"liberar_abs_{dosadora}",
+                "granja": farm.name,
+                "dosadora": dosadora,
+                "requer_confirmacao": True,
+                "mensagem": f"Confirma liberar injeção de {dosadora} em {farm.name}? (override do limite 24h)",
+            }
+        elif acao == "rearmar":
+            param_name = "abs_acid" if dosadora == "acido" else "abs_chlorine"
+            return {
+                "acao": f"rearmar_abs_{dosadora}",
+                "granja": farm.name,
+                "dosadora": dosadora,
+                "parametro": param_name,
+                "valor": 1,
+                "requer_confirmacao": True,
+                "mensagem": f"Confirma rearmar ABS de {dosadora} em {farm.name}? (reativa controle automático)",
+            }
+        else:
+            return {"erro": "Ação deve ser 'liberar' ou 'rearmar'"}
 
     except Exception as e:
-        log.error("Erro ao liberar injeção", error=str(e))
+        log.error("Erro ao controlar ABS", error=str(e))
         return {"erro": str(e)}
 
 
@@ -1077,46 +1048,6 @@ def definir_limite_24h(granja: str, dosadora: str, limite_kg: float) -> dict:
 
     except Exception as e:
         log.error("Erro ao definir limite 24h", error=str(e))
-        return {"erro": str(e)}
-
-
-def rearmar_abs(granja: str, dosadora: str) -> dict:
-    """
-    Rearma o ABS (freio automático) para atuar automaticamente após liberação manual.
-
-    Após usar liberar_injecao, o ABS fica desativado. Esta função reativa
-    o controle automático enviando abs_acid=1 ou abs_chlorine=1 para a placa.
-
-    Args:
-        granja: Nome da granja
-        dosadora: Tipo da dosadora ("acido" ou "cloro")
-
-    Returns:
-        Confirmação do rearmamento solicitado
-    """
-    try:
-        if dosadora not in ["acido", "cloro"]:
-            return {"erro": "Dosadora deve ser 'acido' ou 'cloro'"}
-
-        farm = Farm.get_farm_like_sensibility(granja)
-        if not farm:
-            return {"erro": f"Granja '{granja}' não encontrada"}
-
-        # Parâmetro a ser enviado para a placa
-        param_name = "abs_acid" if dosadora == "acido" else "abs_chlorine"
-
-        return {
-            "acao": f"rearmar_abs_{dosadora}",
-            "granja": farm.name,
-            "dosadora": dosadora,
-            "parametro": param_name,
-            "valor": 1,
-            "requer_confirmacao": True,
-            "mensagem": f"Confirma rearmar ABS de {dosadora} em {farm.name}? (reativa controle automático)",
-        }
-
-    except Exception as e:
-        log.error("Erro ao rearmar ABS", error=str(e))
         return {"erro": str(e)}
 
 
@@ -1249,13 +1180,14 @@ def ajustar_oz1(
 # =============================================================================
 
 
-def habilitar_alarme_galpao(granja: str, galpao: str = None) -> dict:
+def controlar_alarme_galpao(granja: str, acao: str, galpao: str = None) -> dict:
     """
-    Habilita alarmes de um galpão.
+    Habilita ou desabilita alarmes de um galpão.
 
     Args:
         granja: Nome da granja
-        galpao: Nome do galpão (opcional, se não informado habilita todos)
+        acao: habilitar ou desabilitar
+        galpao: Nome do galpão (opcional, se não informado aplica a todos)
 
     Returns:
         Confirmação da ação
@@ -1266,44 +1198,15 @@ def habilitar_alarme_galpao(granja: str, galpao: str = None) -> dict:
             return {"erro": f"Granja '{granja}' não encontrada"}
 
         return {
-            "acao": "habilitar_alarme",
+            "acao": f"{acao}_alarme",
             "granja": farm.name,
             "galpao": galpao or "todos",
             "requer_confirmacao": True,
-            "mensagem": f"Confirma habilitar alarmes em {farm.name}?",
+            "mensagem": f"Confirma {acao} alarmes em {farm.name}?",
         }
 
     except Exception as e:
-        log.error("Erro ao habilitar alarme", error=str(e))
-        return {"erro": str(e)}
-
-
-def desabilitar_alarme_galpao(granja: str, galpao: str = None) -> dict:
-    """
-    Desabilita alarmes de um galpão.
-
-    Args:
-        granja: Nome da granja
-        galpao: Nome do galpão (opcional, se não informado desabilita todos)
-
-    Returns:
-        Confirmação da ação
-    """
-    try:
-        farm = Farm.get_farm_like_sensibility(granja)
-        if not farm:
-            return {"erro": f"Granja '{granja}' não encontrada"}
-
-        return {
-            "acao": "desabilitar_alarme",
-            "granja": farm.name,
-            "galpao": galpao or "todos",
-            "requer_confirmacao": True,
-            "mensagem": f"Confirma desabilitar alarmes em {farm.name}?",
-        }
-
-    except Exception as e:
-        log.error("Erro ao desabilitar alarme", error=str(e))
+        log.error("Erro ao controlar alarme", error=str(e))
         return {"erro": str(e)}
 
 
@@ -1604,14 +1507,43 @@ def consumo(granja: str, dias: int = 7, formato: str = "dados") -> dict:
         return {"erro": str(e)}
 
 
-def relatorio_consumo_gas() -> dict:
+def relatorio_gas(tipo: str = "consumo", granja: str = None) -> dict:
     """
-    Gera relatório consolidado de consumo de gás de todos os locais.
-    Retorna tabela com nível, consumo médio e autonomia de cada local.
+    Relatório de gás: consumo (nível, consumo médio, autonomia) ou abastecimento (últimos 30 dias).
+
+    Args:
+        tipo: consumo ou abastecimento
+        granja: Nome da granja (opcional, se não informado mostra todos)
 
     Returns:
-        Dados do relatório de gás
+        Dados do relatório
     """
+    if tipo == "abastecimento":
+        ctx = get_user_context()
+        try:
+            from monitoring.services.reports import get_relatorio_abastecimento_gas
+
+            farm_name = "TODOS"
+            if granja:
+                farm = Farm.get_farm_like_sensibility(granja)
+                if not farm:
+                    return {"erro": f"Granja '{granja}' não encontrada"}
+                farm_name = farm.name
+
+            allowed_farms = None
+            if farm_name == "TODOS" and ctx:
+                if ctx.is_admin:
+                    allowed_farms = None
+                else:
+                    filters = {"associated": ctx.associated}
+                    allowed_farms = Farm.get_all_farm_name(filters)
+
+            result = get_relatorio_abastecimento_gas(farm_name, allowed_farms=allowed_farms)
+            return {"mensagem": result}
+
+        except Exception as e:
+            log.error("Erro relatório abastecimento gás", error=str(e))
+            return {"erro": str(e)}
     ctx = get_user_context()
     try:
         from z1monitoring_models.models.events import get_events_model
@@ -1681,44 +1613,6 @@ def relatorio_consumo_gas() -> dict:
 
     except Exception as e:
         log.error("Erro relatório consumo gás", error=str(e))
-        return {"erro": str(e)}
-
-
-def relatorio_abastecimento_gas(granja: str = None) -> dict:
-    """
-    Gera relatório de abastecimentos de gás dos últimos 30 dias.
-
-    Args:
-        granja: Nome da granja (opcional, se não informado mostra todos)
-
-    Returns:
-        Relatório de abastecimentos
-    """
-    ctx = get_user_context()
-    try:
-        from monitoring.services.reports import get_relatorio_abastecimento_gas
-
-        farm_name = "TODOS"
-        if granja:
-            farm = Farm.get_farm_like_sensibility(granja)
-            if not farm:
-                return {"erro": f"Granja '{granja}' não encontrada"}
-            farm_name = farm.name
-
-        allowed_farms = None
-        if farm_name == "TODOS" and ctx:
-            if ctx.is_admin:
-                allowed_farms = None
-            else:
-                filters = {"associated": ctx.associated}
-                allowed_farms = Farm.get_all_farm_name(filters)
-
-        result = get_relatorio_abastecimento_gas(farm_name, allowed_farms=allowed_farms)
-
-        return {"mensagem": result}
-
-    except Exception as e:
-        log.error("Erro relatório abastecimento gás", error=str(e))
         return {"erro": str(e)}
 
 
@@ -1928,72 +1822,16 @@ def registrar_visita(granja: str, motivo: str = None, observacoes: str = None) -
 # =============================================================================
 
 
-def iniciar_pre_cadastro() -> dict:
-    """
-    Inicia o processo de pré-cadastro de um novo cliente/equipamento.
+# def iniciar_pre_cadastro() -> dict:
+#     """Inicia o processo de pré-cadastro de um novo cliente/equipamento."""
+#     return {
+#         "acao": "iniciar_pre_cadastro",
+#         "mensagem": "Iniciando pré-cadastro. Vou precisar de algumas informações.",
+#     }
 
-    Returns:
-        Início do fluxo de pré-cadastro
-    """
-    return {
-        "acao": "iniciar_pre_cadastro",
-        "mensagem": "Iniciando pré-cadastro. Vou precisar de algumas informações.",
-        "campos_necessarios": [
-            "Nome completo",
-            "CPF ou CNPJ",
-            "Telefone",
-            "CEP",
-            "Serial do equipamento",
-        ],
-    }
-
-
-def adicionar_equipamento_pre_cadastro(serial: str) -> dict:
-    """
-    Adiciona um equipamento ao pré-cadastro pelo número serial.
-
-    Args:
-        serial: Número serial do equipamento
-
-    Returns:
-        Confirmação do equipamento adicionado
-    """
-    try:
-        # Verifica se o serial tem formato válido
-        if not serial or len(serial) < 5:
-            return {"erro": "Serial inválido. Informe o número completo."}
-
-        # Tenta identificar o tipo pelo prefixo
-        tipo = None
-        serial_upper = serial.upper()
-        prefixos = {
-            "Z1": "SmartPH",
-            "CCD": "Central de Dosagem",
-            "PHI": "Sensor pH",
-            "ORP": "Sensor ORP",
-            "WGT": "Balança",
-            "FLX": "Fluxômetro",
-            "NVL": "Sensor de Nível",
-            "IOX": "SmartSync",
-            "AZ1": "Ambiência",
-            "OZ1": "Gerador de Ozônio",
-        }
-
-        for prefixo, nome in prefixos.items():
-            if serial_upper.startswith(prefixo):
-                tipo = nome
-                break
-
-        return {
-            "acao": "adicionar_equipamento_pre_cadastro",
-            "serial": serial,
-            "tipo_identificado": tipo,
-            "mensagem": f"Equipamento {serial} adicionado" + (f" ({tipo})" if tipo else ""),
-        }
-
-    except Exception as e:
-        log.error("Erro ao adicionar equipamento", error=str(e))
-        return {"erro": str(e)}
+# def adicionar_equipamento_pre_cadastro(serial: str) -> dict:
+#     """Adiciona um equipamento ao pré-cadastro pelo número serial."""
+#     pass
 
 
 # =============================================================================
@@ -2706,28 +2544,17 @@ TOOLS_Z1 = [
     ),
     # ===== ANÁLISES =====
     Tool(
-        name="analise_agua",
-        description="Faz análise completa da qualidade da água (pH, ORP, temperatura) com alertas.",
+        name="analise",
+        description="Faz análise de uma granja. Tipo 'agua': pH, ORP, temperatura com alertas. Tipo 'gas': nível, consumo e autonomia.",
         parameters={
             "type": "object",
             "properties": {
                 "granja": {"type": "string", "description": "Nome da granja"},
+                "tipo": {"type": "string", "description": "agua ou gas (default: agua)", "default": "agua"},
             },
             "required": ["granja"],
         },
-        function=analise_agua,
-    ),
-    Tool(
-        name="analise_gas",
-        description="Faz análise do gás - nível, consumo diário e autonomia restante.",
-        parameters={
-            "type": "object",
-            "properties": {
-                "granja": {"type": "string", "description": "Nome da granja"},
-            },
-            "required": ["granja"],
-        },
-        function=analise_gas,
+        function=analise,
     ),
     # ===== GRANJAS =====
     Tool(
@@ -2837,59 +2664,32 @@ TOOLS_Z1 = [
         function=controlar_dosadora,
     ),
     Tool(
-        name="liberar_injecao",
-        description="DESTRAVAR/LIBERAR o ABS - desativa temporariamente o freio automático para permitir injeção mesmo após atingir limite 24h. Use quando precisa DESTRAVAR, LIBERAR, ou DESBLOQUEAR a dosagem.",
+        name="controlar_abs",
+        description="Controla o ABS (freio automático de limite 24h). Liberar = destravar/desbloquear injeção. Rearmar = reativar freio automático.",
         parameters={
             "type": "object",
             "properties": {
                 "granja": {"type": "string", "description": "Nome da granja"},
-                "dosadora": {
-                    "type": "string",
-                    "enum": ["acido", "cloro"],
-                    "description": "Tipo da dosadora",
-                },
+                "dosadora": {"type": "string", "enum": ["acido", "cloro"], "description": "Tipo da dosadora"},
+                "acao": {"type": "string", "description": "liberar ou rearmar"},
             },
-            "required": ["granja", "dosadora"],
+            "required": ["granja", "dosadora", "acao"],
         },
-        function=liberar_injecao,
+        function=controlar_abs,
     ),
     Tool(
         name="definir_limite_24h",
-        description="Define o limite de consumo em 24h para uma dosadora (ABS). Quando atingido, bloqueia injeção automaticamente.",
+        description="Define o limite de consumo em 24h para uma dosadora (ABS).",
         parameters={
             "type": "object",
             "properties": {
                 "granja": {"type": "string", "description": "Nome da granja"},
-                "dosadora": {
-                    "type": "string",
-                    "enum": ["acido", "cloro"],
-                    "description": "Tipo da dosadora",
-                },
-                "limite_kg": {
-                    "type": "number",
-                    "description": "Limite em kg para 24h (ex: 5.0)",
-                },
+                "dosadora": {"type": "string", "enum": ["acido", "cloro"], "description": "Tipo da dosadora"},
+                "limite_kg": {"type": "number", "description": "Limite em kg para 24h (ex: 5.0)"},
             },
             "required": ["granja", "dosadora", "limite_kg"],
         },
         function=definir_limite_24h,
-    ),
-    Tool(
-        name="rearmar_abs",
-        description="TRAVAR/ARMAR o ABS - ativa o freio automático de limite 24h. Use quando o usuário pedir para TRAVAR, ARMAR, ATIVAR, ou HABILITAR o ABS/freio automático de ácido ou cloro.",
-        parameters={
-            "type": "object",
-            "properties": {
-                "granja": {"type": "string", "description": "Nome da granja"},
-                "dosadora": {
-                    "type": "string",
-                    "enum": ["acido", "cloro"],
-                    "description": "Tipo da dosadora",
-                },
-            },
-            "required": ["granja", "dosadora"],
-        },
-        function=rearmar_abs,
     ),
     Tool(
         name="ajustar_oz1",
@@ -2916,30 +2716,18 @@ TOOLS_Z1 = [
     ),
     # ===== ALARMES =====
     Tool(
-        name="habilitar_alarme_galpao",
-        description="Habilita os alarmes de um galpão ou de toda a granja.",
+        name="controlar_alarme_galpao",
+        description="Habilita ou desabilita alarmes de um galpão ou de toda a granja.",
         parameters={
             "type": "object",
             "properties": {
                 "granja": {"type": "string", "description": "Nome da granja"},
+                "acao": {"type": "string", "description": "habilitar ou desabilitar"},
                 "galpao": {"type": "string", "description": "Nome do galpão (opcional)"},
             },
-            "required": ["granja"],
+            "required": ["granja", "acao"],
         },
-        function=habilitar_alarme_galpao,
-    ),
-    Tool(
-        name="desabilitar_alarme_galpao",
-        description="Desabilita os alarmes de um galpão ou de toda a granja.",
-        parameters={
-            "type": "object",
-            "properties": {
-                "granja": {"type": "string", "description": "Nome da granja"},
-                "galpao": {"type": "string", "description": "Nome do galpão (opcional)"},
-            },
-            "required": ["granja"],
-        },
-        function=desabilitar_alarme_galpao,
+        function=controlar_alarme_galpao,
     ),
     # ===== NAVEGAÇÃO =====
     Tool(
@@ -2989,22 +2777,17 @@ TOOLS_Z1 = [
         function=consumo,
     ),
     Tool(
-        name="relatorio_consumo_gas",
-        description="Gera relatório consolidado de consumo de gás com nível, consumo médio e autonomia de cada local.",
-        parameters={"type": "object", "properties": {}, "required": []},
-        function=relatorio_consumo_gas,
-    ),
-    Tool(
-        name="relatorio_abastecimento_gas",
-        description="Gera relatório de abastecimentos de gás dos últimos 30 dias. Pode filtrar por granja.",
+        name="relatorio_gas",
+        description="Relatório de gás. Tipo 'consumo': nível, consumo médio e autonomia. Tipo 'abastecimento': abastecimentos dos últimos 30 dias.",
         parameters={
             "type": "object",
             "properties": {
-                "granja": {"type": "string", "description": "Nome da granja (opcional, se não informado mostra todos)"},
+                "tipo": {"type": "string", "description": "consumo ou abastecimento (default: consumo)", "default": "consumo"},
+                "granja": {"type": "string", "description": "Nome da granja (opcional)"},
             },
             "required": [],
         },
-        function=relatorio_abastecimento_gas,
+        function=relatorio_gas,
     ),
     Tool(
         name="ranking_granjas",
@@ -3082,24 +2865,9 @@ TOOLS_Z1 = [
         function=registrar_visita,
     ),
     # ===== PRÉ-CADASTRO =====
-    Tool(
-        name="iniciar_pre_cadastro",
-        description="Inicia o processo de pré-cadastro de novo cliente/equipamento.",
-        parameters={"type": "object", "properties": {}, "required": []},
-        function=iniciar_pre_cadastro,
-    ),
-    Tool(
-        name="adicionar_equipamento_pre_cadastro",
-        description="Adiciona um equipamento ao pré-cadastro pelo número serial.",
-        parameters={
-            "type": "object",
-            "properties": {
-                "serial": {"type": "string", "description": "Número serial do equipamento"},
-            },
-            "required": ["serial"],
-        },
-        function=adicionar_equipamento_pre_cadastro,
-    ),
+    # Tool pre-cadastro comentada - não está em uso
+    # Tool(name="iniciar_pre_cadastro", ...),
+    # Tool(name="adicionar_equipamento_pre_cadastro", ...),
     # ===== DIMENSIONAMENTO ETA =====
     Tool(
         name="dimensionar_eta",
