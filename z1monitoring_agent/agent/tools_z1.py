@@ -84,6 +84,36 @@ def get_user_context() -> Optional[UserContext]:
 # =============================================================================
 
 
+def consultar_status(tipo: str, granja: str = None, filtro: str = None, dias: int = 1) -> dict:
+    """
+    Consulta status geral do sistema. Unifica alarmes, equipamentos offline/online,
+    falta de insumos, falta de gás e sensores fora da faixa.
+
+    Args:
+        tipo: alarmes, offline, online, falta_insumo, falta_gas, fora_faixa
+        granja: Nome da granja para filtrar (opcional)
+        filtro: Filtro adicional - para falta_insumo: acido/cloro/todos; para fora_faixa: ph/orp/todos
+        dias: Dias para buscar alarmes (default: 1)
+
+    Returns:
+        Resultado da consulta
+    """
+    if tipo == "alarmes":
+        return consultar_alarmes(granja=granja, dias=dias)
+    elif tipo == "offline":
+        return consultar_equipamentos(status="offline")
+    elif tipo == "online":
+        return consultar_equipamentos(status="online")
+    elif tipo == "falta_insumo":
+        return consultar_falta_insumo(insumo=filtro or "todos")
+    elif tipo == "falta_gas":
+        return consultar_falta_gas()
+    elif tipo == "fora_faixa":
+        return consultar_sensor_fora_faixa(sensor=filtro or "todos")
+    else:
+        return {"erro": f"Tipo '{tipo}' não reconhecido. Use: alarmes, offline, online, falta_insumo, falta_gas, fora_faixa"}
+
+
 def consultar_alarmes(granja: str = None, dias: int = 1) -> dict:
     """
     Consulta alarmes urgentes recentes.
@@ -2457,59 +2487,19 @@ def consultar_periodos_offline(granja: str, tipo_placa: str = None, dias: int = 
 TOOLS_Z1 = [
     # ===== STATUS E CONSULTAS =====
     Tool(
-        name="consultar_alarmes",
-        description="Consulta alarmes urgentes recentes. Pode filtrar por granja e período em dias.",
+        name="consultar_status",
+        description="Consulta status do sistema: alarmes, equipamentos offline/online, falta de insumos, falta de gás, sensores fora da faixa.",
         parameters={
             "type": "object",
             "properties": {
-                "granja": {"type": "string", "description": "Nome da granja (opcional)"},
-                "dias": {"type": "integer", "description": "Dias para buscar (default: 1)", "default": 1},
+                "tipo": {"type": "string", "enum": ["alarmes", "offline", "online", "falta_insumo", "falta_gas", "fora_faixa"], "description": "Tipo da consulta"},
+                "granja": {"type": "string", "description": "Filtrar por granja (opcional)"},
+                "filtro": {"type": "string", "description": "Filtro: acido/cloro/todos para insumo, ph/orp/todos para fora_faixa"},
+                "dias": {"type": "integer", "description": "Dias para alarmes (default: 1)", "default": 1},
             },
-            "required": [],
+            "required": ["tipo"],
         },
-        function=consultar_alarmes,
-    ),
-    Tool(
-        name="consultar_equipamentos",
-        description="Lista equipamentos por status de comunicação (online ou offline). Offline mostra dias sem comunicar.",
-        parameters={
-            "type": "object",
-            "properties": {
-                "status": {"type": "string", "description": "offline ou online (default: offline)", "default": "offline"},
-            },
-            "required": [],
-        },
-        function=consultar_equipamentos,
-    ),
-    Tool(
-        name="consultar_falta_insumo",
-        description="Lista equipamentos com falta de insumo. Pode filtrar por ácido, cloro, ou todos.",
-        parameters={
-            "type": "object",
-            "properties": {
-                "insumo": {"type": "string", "description": "acido, cloro, ou todos (default: todos)", "default": "todos"},
-            },
-            "required": [],
-        },
-        function=consultar_falta_insumo,
-    ),
-    Tool(
-        name="consultar_falta_gas",
-        description="Lista equipamentos/locais com nível de gás baixo.",
-        parameters={"type": "object", "properties": {}, "required": []},
-        function=consultar_falta_gas,
-    ),
-    Tool(
-        name="consultar_sensor_fora_faixa",
-        description="Lista equipamentos com sensor fora da faixa configurada. Pode filtrar por pH, ORP, ou todos.",
-        parameters={
-            "type": "object",
-            "properties": {
-                "sensor": {"type": "string", "description": "ph, orp, ou todos (default: todos)", "default": "todos"},
-            },
-            "required": [],
-        },
-        function=consultar_sensor_fora_faixa,
+        function=consultar_status,
     ),
     Tool(
         name="status_equipamento",
