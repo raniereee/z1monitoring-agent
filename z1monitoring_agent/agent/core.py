@@ -48,6 +48,9 @@ class Agent:
         self.system_prompt = system_prompt
         self.context = context or {}
         self.messages = []  # Histórico da conversa
+        self.total_input_tokens = 0
+        self.total_output_tokens = 0
+        self.api_calls = 0
 
     def _build_system_prompt(self) -> str:
         """Monta o prompt de sistema com contexto."""
@@ -122,6 +125,12 @@ class Agent:
                 tools=self._get_tools_schema(),
                 messages=self.messages,
             )
+
+            # Acumula tokens
+            if hasattr(response, 'usage') and response.usage:
+                self.total_input_tokens += response.usage.input_tokens
+                self.total_output_tokens += response.usage.output_tokens
+            self.api_calls += 1
 
             log.info("🤖 Agent resposta", stop_reason=response.stop_reason)
 
