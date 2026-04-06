@@ -164,7 +164,7 @@ def consultar_equipamentos(status: str = "offline") -> dict:
 
             for plate in plates:
                 last = LastEvent.get_last_register(plate.owner, plate.serial)
-                ultimo_contato = last.updated_at if last else None
+                ultimo_contato = last.get("created_at") if isinstance(last, dict) else getattr(last, "created_at", None) if last else None
                 dias_offline = (now - ultimo_contato).days if ultimo_contato else 999
 
                 equipamentos.append({
