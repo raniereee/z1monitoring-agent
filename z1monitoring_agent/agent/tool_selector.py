@@ -70,6 +70,9 @@ TOOL_SETS = {
     ],
 }
 
+# Categorias que exigem raciocínio analítico (usam Sonnet)
+DEEP_CATEGORIES = {"relatorios"}
+
 CLASSIFY_PROMPT = """Classifique a intenção do usuário nas categorias abaixo.
 O usuário pode pedir MAIS DE UMA coisa na mesma mensagem. Identifique TODAS as categorias necessárias.
 Use o histórico da conversa para entender o contexto.
@@ -174,3 +177,10 @@ def select_tools(all_tools: list, categories: list = None) -> list:
     )
 
     return selected
+
+
+def needs_deep_model(categories: list = None) -> bool:
+    """Retorna True se alguma categoria exige modelo analítico (Sonnet)."""
+    if not categories:
+        return True  # Sem classificação = fallback seguro com Sonnet
+    return bool(set(categories) & DEEP_CATEGORIES)

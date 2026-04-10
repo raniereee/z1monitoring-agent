@@ -18,7 +18,8 @@ client = anthropic.Anthropic()
 
 # Configurações
 MAX_ITERATIONS = 7  # Evita loops infinitos e gasto desnecessário de tokens
-MODEL = "claude-sonnet-4-20250514"
+MODEL_FAST = "claude-haiku-4-5-20251001"
+MODEL_DEEP = "claude-sonnet-4-20250514"
 
 
 class Agent:
@@ -37,16 +38,19 @@ class Agent:
         tools: List[Tool],
         system_prompt: str,
         context: Optional[dict] = None,
+        use_deep_model: bool = False,
     ):
         """
         Args:
             tools: Lista de ferramentas disponíveis para o agente
             system_prompt: Prompt de sistema que define o comportamento
             context: Contexto adicional (dados do usuário, granja, etc)
+            use_deep_model: Se True usa Sonnet (análise profunda), senão Haiku (rápido)
         """
         self.tools = {tool.name: tool for tool in tools}
         self.system_prompt = system_prompt
         self.context = context or {}
+        self.model = MODEL_DEEP if use_deep_model else MODEL_FAST
         self.messages = []  # Histórico da conversa
         self.total_input_tokens = 0
         self.total_output_tokens = 0
@@ -119,7 +123,7 @@ class Agent:
 
             # Chama o LLM
             response = client.messages.create(
-                model=MODEL,
+                model=self.model,
                 max_tokens=1024,
                 system=self._build_system_prompt(),
                 tools=self._get_tools_schema(),
