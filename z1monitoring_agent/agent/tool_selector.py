@@ -52,6 +52,7 @@ TOOL_SETS = {
     ],
     "relatorios": [
         "consumo",
+        "analise_consumo_detalhada",
         "relatorio_gas",
         "ranking_granjas",
     ],

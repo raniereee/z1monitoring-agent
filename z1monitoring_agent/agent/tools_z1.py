@@ -1537,6 +1537,151 @@ def consumo(granja: str, dias: int = 7, formato: str = "dados") -> dict:
         return {"erro": str(e)}
 
 
+def analise_consumo_detalhada(granja: str, dias: int = 10) -> dict:
+    """
+    Análise detalhada de consumo de uma granja: consumo diário, perfil horário,
+    períodos offline do FLX e variações significativas.
+
+    Args:
+        granja: Nome da granja
+        dias: Período em dias (default: 10, máximo: 30)
+
+    Returns:
+        Dados analíticos completos para interpretação
+    """
+    try:
+        from z1monitoring_models.dbms import Session
+        from sqlalchemy import text
+
+        farm = Farm.get_farm_like_sensibility(granja)
+        if not farm:
+            return {"erro": f"Granja '{granja}' não encontrada"}
+
+        if dias < 1 or dias > 30:
+            dias = min(max(dias, 1), 30)
+
+        result = {"granja": farm.name, "periodo_dias": dias}
+
+        with Session() as session:
+            # 1. Consumo diário de água (FLX)
+            daily_water = session.execute(text("""
+                SELECT
+                    DATE(created_at) AS dia,
+                    COUNT(*) AS total_leituras,
+                    ROUND(SUM((readings->>'water_flow')::numeric)) AS consumo_litros,
+                    ROUND(AVG((readings->>'water_flow')::numeric), 1) AS media_fluxo_lmin
+                FROM events_flx
+                WHERE farm ILIKE :farm
+                  AND created_at >= NOW() - INTERVAL :dias
+                GROUP BY DATE(created_at)
+                ORDER BY dia
+            """), {"farm": f"%{farm.name}%", "dias": f"{dias} days"}).fetchall()
+
+            result["consumo_agua_diario"] = [
+                {"dia": str(r[0]), "leituras": r[1], "litros": float(r[2] or 0), "media_fluxo_lmin": float(r[3] or 0)}
+                for r in daily_water
+            ]
+
+            # 2. Consumo diário de ácido e cloro (CCD ou Z1)
+            plates = Plate.get_all({"farm_associated": farm.name})
+            has_ccd = any(p.plate_type == "CCD" for p in plates)
+
+            if has_ccd:
+                daily_insumos = session.execute(text("""
+                    SELECT
+                        DATE(created_at) AS dia,
+                        ROUND(SUM(COALESCE((readings->>'acid_consumed_acc')::numeric, 0)), 1) AS acido_kg,
+                        ROUND(SUM(COALESCE((readings->>'chlorine_consumed_acc')::numeric, 0)), 1) AS cloro_kg
+                    FROM events_ccd
+                    WHERE farm ILIKE :farm
+                      AND created_at >= NOW() - INTERVAL :dias
+                    GROUP BY DATE(created_at)
+                    ORDER BY dia
+                """), {"farm": f"%{farm.name}%", "dias": f"{dias} days"}).fetchall()
+
+                result["consumo_insumos_diario"] = [
+                    {"dia": str(r[0]), "acido_kg": float(r[1] or 0), "cloro_kg": float(r[2] or 0)}
+                    for r in daily_insumos
+                ]
+
+            # 3. Perfil horário (divide período ao meio para comparação)
+            metade = dias // 2
+            hourly = session.execute(text("""
+                SELECT
+                    CASE WHEN DATE(created_at) < (NOW() - INTERVAL :metade)::date THEN 'primeira_metade' ELSE 'segunda_metade' END AS periodo,
+                    EXTRACT(HOUR FROM created_at)::int AS hora,
+                    ROUND(AVG((readings->>'water_flow')::numeric), 1) AS media_fluxo
+                FROM events_flx
+                WHERE farm ILIKE :farm
+                  AND created_at >= NOW() - INTERVAL :dias
+                GROUP BY periodo, hora
+                ORDER BY periodo, hora
+            """), {"farm": f"%{farm.name}%", "dias": f"{dias} days", "metade": f"{metade} days"}).fetchall()
+
+            perfil_primeira = {}
+            perfil_segunda = {}
+            for r in hourly:
+                target = perfil_primeira if r[0] == "primeira_metade" else perfil_segunda
+                target[int(r[1])] = float(r[2] or 0)
+
+            result["perfil_horario"] = {
+                "primeira_metade_periodo": perfil_primeira,
+                "segunda_metade_periodo": perfil_segunda,
+            }
+
+            # 4. Gaps de comunicação FLX > 15 min
+            gaps = session.execute(text("""
+                WITH ordered AS (
+                    SELECT
+                        created_at,
+                        LAG(created_at) OVER (ORDER BY created_at) AS prev
+                    FROM events_flx
+                    WHERE farm ILIKE :farm
+                      AND created_at >= NOW() - INTERVAL :dias
+                )
+                SELECT
+                    prev AS offline_inicio,
+                    created_at AS online_retorno,
+                    ROUND(EXTRACT(EPOCH FROM (created_at - prev)) / 60) AS minutos_offline
+                FROM ordered
+                WHERE prev IS NOT NULL
+                  AND EXTRACT(EPOCH FROM (created_at - prev)) / 60 > 15
+                ORDER BY prev DESC
+                LIMIT 20
+            """), {"farm": f"%{farm.name}%", "dias": f"{dias} days"}).fetchall()
+
+            result["periodos_offline_flx"] = [
+                {"inicio": str(r[0]), "retorno": str(r[1]), "minutos": int(r[2])}
+                for r in gaps
+            ]
+            result["total_periodos_offline"] = len(gaps)
+
+            # 5. Detectar variações significativas (queda ou aumento > 40% entre dias consecutivos)
+            if result["consumo_agua_diario"]:
+                variacoes = []
+                dados = result["consumo_agua_diario"]
+                for i in range(1, len(dados)):
+                    prev_litros = dados[i - 1]["litros"]
+                    curr_litros = dados[i]["litros"]
+                    if prev_litros > 0:
+                        variacao_pct = ((curr_litros - prev_litros) / prev_litros) * 100
+                        if abs(variacao_pct) > 40:
+                            variacoes.append({
+                                "de": dados[i - 1]["dia"],
+                                "para": dados[i]["dia"],
+                                "litros_antes": prev_litros,
+                                "litros_depois": curr_litros,
+                                "variacao_pct": round(variacao_pct, 1),
+                            })
+                result["variacoes_significativas"] = variacoes
+
+        return result
+
+    except Exception as e:
+        log.error("Erro na análise detalhada de consumo", error=str(e))
+        return {"erro": str(e)}
+
+
 def relatorio_gas(tipo: str = "consumo", granja: str = None) -> dict:
     """
     Relatório de gás: consumo (nível, consumo médio, autonomia) ou abastecimento (últimos 30 dias).
@@ -2765,6 +2910,19 @@ TOOLS_Z1 = [
             "required": ["granja"],
         },
         function=consumo,
+    ),
+    Tool(
+        name="analise_consumo_detalhada",
+        description="Análise profunda de consumo: consumo diário de água/ácido/cloro, perfil horário comparativo, períodos offline do FLX, e detecção de variações significativas. Use quando o usuário pedir análise completa, investigação de queda/aumento de consumo, ou diagnóstico de problemas.",
+        parameters={
+            "type": "object",
+            "properties": {
+                "granja": {"type": "string", "description": "Nome da granja"},
+                "dias": {"type": "integer", "description": "Período em dias (default: 10, máximo: 30)", "default": 10},
+            },
+            "required": ["granja"],
+        },
+        function=analise_consumo_detalhada,
     ),
     Tool(
         name="relatorio_gas",
