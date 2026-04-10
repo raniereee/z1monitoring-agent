@@ -56,7 +56,7 @@ class UserContext:
         self.permission_name = user.permissions.get("name", "SECONDARY") if user else "SECONDARY"
         self.associated = user.associated if user else None
         self.is_admin = self.permission_name == "ADMIN"
-        self.is_primary = self.permission_name in ["ETA_REPRESENTANTES", "ETA_VENDEDOR", "URBANO_REPRESENTANTES"]
+        self.is_primary = self.permission_name in ["ETA_REPRESENTANTES", "ETEA_REPRESENTANTES_ADMIN", "ETA_REPRESENTANTES_TEC", "ETA_VENDEDOR", "URBANO_REPRESENTANTES"]
         self.is_urban = self.permission_name == "URBANO_REPRESENTANTES"
         self.pending_messages = []  # Mensagens extras (imagens, docs) para enviar junto com a resposta
         self.msisdn = None  # Telefone do usuário (WhatsApp)

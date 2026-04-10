@@ -69,7 +69,8 @@ TOOL_SETS = {
     ],
 }
 
-CLASSIFY_PROMPT = """Classifique a intenção do usuário em UMA das categorias abaixo.
+CLASSIFY_PROMPT = """Classifique a intenção do usuário nas categorias abaixo.
+O usuário pode pedir MAIS DE UMA coisa na mesma mensagem. Identifique TODAS as categorias necessárias.
 Use o histórico da conversa para entender o contexto.
 
 CATEGORIAS:
@@ -81,7 +82,8 @@ CATEGORIAS:
 - granjas_clientes: listar granjas, buscar cliente, informações de clientes primários
 - outros: registrar visita, dimensionar ETA, suporte, ajuda, menu
 
-Responda APENAS com o nome da categoria, sem explicação."""
+Responda APENAS com os nomes das categorias separados por vírgula, sem explicação.
+Exemplos: "relatorios" ou "relatorios,consulta_status" ou "tempo_real,ajuste_parametros"."""
 
 
 def classify_intent(message: str, history: list = None) -> str:
@@ -114,51 +116,57 @@ Mensagem atual do usuário: {message}"""
             messages=[{"role": "user", "content": user_msg}],
         )
 
-        category = response.content[0].text.strip().lower()
+        raw = response.content[0].text.strip().lower()
+        categories = [c.strip() for c in raw.split(",") if c.strip()]
 
         # Custo da classificação
         input_tokens = response.usage.input_tokens if response.usage else 0
         output_tokens = response.usage.output_tokens if response.usage else 0
 
+        # Filtra apenas categorias válidas
+        valid = [c for c in categories if c in TOOL_SETS]
+
         log.info(
             "🏷️ Intent classificada",
-            category=category,
+            categories=valid,
             input_tokens=input_tokens,
             output_tokens=output_tokens,
         )
 
-        if category not in TOOL_SETS:
-            log.warning(f"Categoria desconhecida: {category}, usando todas")
+        if not valid:
+            log.warning(f"Categorias desconhecidas: {categories}, usando todas")
             return None
 
-        return category
+        return valid
 
     except Exception as e:
         log.error("Erro ao classificar intent", error=str(e))
         return None
 
 
-def select_tools(all_tools: list, category: str = None) -> list:
+def select_tools(all_tools: list, categories: list = None) -> list:
     """
-    Filtra tools baseado na categoria.
+    Filtra tools baseado nas categorias.
 
     Args:
         all_tools: Lista completa de tools
-        category: Categoria classificada (None = todas)
+        categories: Lista de categorias classificadas (None = todas)
 
     Returns:
         Lista filtrada de tools
     """
-    if not category:
+    if not categories:
         return all_tools
 
-    allowed_names = set(CORE_TOOLS + TOOL_SETS.get(category, []))
+    allowed_names = set(CORE_TOOLS)
+    for cat in categories:
+        allowed_names.update(TOOL_SETS.get(cat, []))
 
     selected = [t for t in all_tools if t.name in allowed_names]
 
     log.info(
         "🔧 Tools selecionadas",
-        category=category,
+        categories=categories,
         total=len(all_tools),
         selected=len(selected),
         names=[t.name for t in selected],
