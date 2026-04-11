@@ -30,6 +30,7 @@ TOOL_SETS = {
         "ranking_offline",
         "consultar_periodos_offline",
         "saude_empresa",
+        "validar_flx_vs_ccd",
     ],
     "tempo_real": [
         "tempo_real",
@@ -53,6 +54,7 @@ TOOL_SETS = {
     "relatorios": [
         "consumo",
         "analise_consumo_detalhada",
+        "validar_flx_vs_ccd",
         "relatorio_gas",
         "ranking_granjas",
     ],

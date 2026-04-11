@@ -2653,6 +2653,245 @@ def consultar_periodos_offline(granja: str, tipo_placa: str = None, dias: int = 
         return {"erro": str(e)}
 
 
+def validar_flx_vs_ccd(granja: str, dias: int = 14, data_inicio: str = None) -> dict:
+    """
+    Diagnóstico cruzado de sensores: compara dados de FLX vs CCD para detectar
+    problemas de sensor, anomalias de consumo e inconsistências.
+
+    Args:
+        granja: Nome da granja
+        dias: Período em dias (default: 14, máximo: 30)
+        data_inicio: Data de início YYYY-MM-DD (opcional, calcula dias até hoje)
+    """
+    try:
+        from z1monitoring_models.dbms import Session
+        from sqlalchemy import text
+        from datetime import date
+        from statistics import median
+
+        farm = Farm.get_farm_like_sensibility(granja)
+        if not farm:
+            return {"erro": f"Granja '{granja}' não encontrada"}
+
+        if data_inicio:
+            try:
+                dt_inicio = date.fromisoformat(data_inicio)
+                dias = (date.today() - dt_inicio).days
+                if dias < 1:
+                    dias = 1
+            except ValueError:
+                pass
+
+        if dias < 1 or dias > 30:
+            dias = min(max(dias, 1), 30)
+
+        plates = Plate.get_all({"farm_associated": farm.name})
+        has_flx = any(p.plate_type == "FLX" for p in plates)
+        has_ccd = any(p.plate_type == "CCD" for p in plates)
+        has_z1 = any(p.plate_type == "Z1" for p in plates)
+
+        if not has_flx:
+            return {"erro": f"Granja '{farm.name}' não possui sensor FLX para diagnóstico"}
+
+        result = {
+            "granja": farm.name,
+            "periodo_dias": dias,
+            "equipamentos": [p.plate_type for p in plates],
+            "diagnosticos": [],
+            "recomendacoes": [],
+        }
+
+        with Session() as session:
+            # 1. Consumo diário FLX
+            flx_diario = session.execute(text("""
+                SELECT DATE(created_at) AS dia,
+                    ROUND(SUM((readings->>'water_flow')::numeric)) AS litros,
+                    ROUND(AVG((readings->>'water_flow')::numeric), 1) AS media_fluxo,
+                    ROUND(MAX((readings->>'water_flow')::numeric), 1) AS max_fluxo,
+                    COUNT(*) AS leituras
+                FROM events_flx
+                WHERE farm ILIKE :farm AND created_at >= NOW() - INTERVAL :dias
+                GROUP BY DATE(created_at)
+                ORDER BY dia
+            """), {"farm": f"%{farm.name}%", "dias": f"{dias} days"}).fetchall()
+
+            result["flx_diario"] = [
+                {"dia": str(r[0]), "litros": float(r[1] or 0), "media": float(r[2] or 0),
+                 "max": float(r[3] or 0), "leituras": r[4]}
+                for r in flx_diario
+            ]
+
+            # 2. Consumo diário CCD (se existir)
+            if has_ccd:
+                ccd_diario = session.execute(text("""
+                    WITH ultimo_do_dia AS (
+                        SELECT DATE(created_at) AS dia,
+                            (readings->>'Fluxo de Água')::numeric AS fluxo,
+                            (readings->>'Consumo Ácido 24h')::numeric AS acido_24h,
+                            (readings->>'Consumo Cloro 24h')::numeric AS cloro_24h,
+                            (readings->>'PH')::numeric AS ph,
+                            (readings->>'ORP')::numeric AS orp,
+                            ROW_NUMBER() OVER (PARTITION BY DATE(created_at) ORDER BY created_at DESC) AS rn
+                        FROM events_ccd
+                        WHERE farm ILIKE :farm AND created_at >= NOW() - INTERVAL :dias
+                    )
+                    SELECT dia, ROUND(acido_24h, 2) AS acido_24h, ROUND(cloro_24h, 2) AS cloro_24h,
+                           ROUND(ph, 2) AS ph, ROUND(orp, 0) AS orp
+                    FROM ultimo_do_dia WHERE rn = 1 ORDER BY dia
+                """), {"farm": f"%{farm.name}%", "dias": f"{dias} days"}).fetchall()
+
+                result["ccd_diario"] = [
+                    {"dia": str(r[0]), "acido_24h": float(r[1] or 0), "cloro_24h": float(r[2] or 0),
+                     "ph": float(r[3] or 0), "orp": float(r[4] or 0)}
+                    for r in ccd_diario
+                ]
+
+                # Água via CCD (soma diária)
+                ccd_agua = session.execute(text("""
+                    SELECT DATE(created_at) AS dia,
+                        ROUND(SUM(COALESCE((readings->>'Fluxo de Água')::numeric, 0))) AS litros
+                    FROM events_ccd
+                    WHERE farm ILIKE :farm AND created_at >= NOW() - INTERVAL :dias
+                    GROUP BY DATE(created_at)
+                    ORDER BY dia
+                """), {"farm": f"%{farm.name}%", "dias": f"{dias} days"}).fetchall()
+
+                ccd_agua_map = {str(r[0]): float(r[1] or 0) for r in ccd_agua}
+
+            # 3. Análise: detecção de anomalias
+            if len(flx_diario) >= 3:
+                litros_list = [float(r[1] or 0) for r in flx_diario]
+                max_fluxo_list = [float(r[3] or 0) for r in flx_diario]
+                mediana_litros = median(litros_list)
+
+                # Detectar queda brusca
+                for i in range(1, len(litros_list)):
+                    if litros_list[i-1] > 0:
+                        variacao = (litros_list[i] - litros_list[i-1]) / litros_list[i-1] * 100
+                        if variacao < -40:
+                            result["diagnosticos"].append({
+                                "tipo": "queda_brusca_flx",
+                                "de": str(flx_diario[i-1][0]),
+                                "para": str(flx_diario[i][0]),
+                                "litros_antes": litros_list[i-1],
+                                "litros_depois": litros_list[i],
+                                "variacao_pct": round(variacao, 1),
+                            })
+
+                # Detectar teto de sensor (max estável em valor baixo)
+                if len(max_fluxo_list) >= 4:
+                    primeira_metade = max_fluxo_list[:len(max_fluxo_list)//2]
+                    segunda_metade = max_fluxo_list[len(max_fluxo_list)//2:]
+                    max_antes = max(primeira_metade) if primeira_metade else 0
+                    max_depois = max(segunda_metade) if segunda_metade else 0
+
+                    if max_antes > 0 and max_depois > 0 and max_depois < max_antes * 0.5:
+                        result["diagnosticos"].append({
+                            "tipo": "teto_sensor_reduzido",
+                            "max_antes": max_antes,
+                            "max_depois": max_depois,
+                            "reducao_pct": round((1 - max_depois/max_antes) * 100, 1),
+                            "detalhe": f"Fluxo máximo caiu de {max_antes} para {max_depois} L/min. Possível obstrução ou problema no sensor FLX.",
+                        })
+
+            # 4. Cross-validation FLX vs CCD
+            if has_ccd and result.get("ccd_diario"):
+                flx_map = {d["dia"]: d["litros"] for d in result["flx_diario"]}
+                ccd_insumos = {d["dia"]: d for d in result["ccd_diario"]}
+
+                # Pegar dias em comum
+                dias_comuns = sorted(set(flx_map.keys()) & set(ccd_insumos.keys()))
+                if len(dias_comuns) >= 4:
+                    metade = len(dias_comuns) // 2
+                    dias_antes = dias_comuns[:metade]
+                    dias_depois = dias_comuns[metade:]
+
+                    # Médias antes e depois
+                    agua_antes = sum(flx_map[d] for d in dias_antes) / len(dias_antes)
+                    agua_depois = sum(flx_map[d] for d in dias_depois) / len(dias_depois)
+                    acido_antes = sum(ccd_insumos[d]["acido_24h"] for d in dias_antes) / len(dias_antes)
+                    acido_depois = sum(ccd_insumos[d]["acido_24h"] for d in dias_depois) / len(dias_depois)
+                    cloro_antes = sum(ccd_insumos[d]["cloro_24h"] for d in dias_antes) / len(dias_antes)
+                    cloro_depois = sum(ccd_insumos[d]["cloro_24h"] for d in dias_depois) / len(dias_depois)
+                    ph_antes = sum(ccd_insumos[d]["ph"] for d in dias_antes) / len(dias_antes)
+                    ph_depois = sum(ccd_insumos[d]["ph"] for d in dias_depois) / len(dias_depois)
+
+                    var_agua = ((agua_depois - agua_antes) / agua_antes * 100) if agua_antes > 0 else 0
+                    var_acido = ((acido_depois - acido_antes) / acido_antes * 100) if acido_antes > 0 else 0
+                    var_cloro = ((cloro_depois - cloro_antes) / cloro_antes * 100) if cloro_antes > 0 else 0
+
+                    result["comparativo"] = {
+                        "periodo_antes": f"{dias_antes[0]} a {dias_antes[-1]}",
+                        "periodo_depois": f"{dias_depois[0]} a {dias_depois[-1]}",
+                        "agua_media_antes": round(agua_antes, 0),
+                        "agua_media_depois": round(agua_depois, 0),
+                        "variacao_agua_pct": round(var_agua, 1),
+                        "acido_medio_antes": round(acido_antes, 2),
+                        "acido_medio_depois": round(acido_depois, 2),
+                        "variacao_acido_pct": round(var_acido, 1),
+                        "cloro_medio_antes": round(cloro_antes, 2),
+                        "cloro_medio_depois": round(cloro_depois, 2),
+                        "variacao_cloro_pct": round(var_cloro, 1),
+                        "ph_medio_antes": round(ph_antes, 2),
+                        "ph_medio_depois": round(ph_depois, 2),
+                    }
+
+                    # Diagnóstico de inconsistência
+                    agua_caiu_muito = var_agua < -30
+                    insumos_estavel = abs(var_acido) < 20 and abs(var_cloro) < 20
+                    ph_estavel = abs(ph_depois - ph_antes) < 0.5
+
+                    if agua_caiu_muito and insumos_estavel and ph_estavel:
+                        result["diagnosticos"].append({
+                            "tipo": "inconsistencia_flx_vs_ccd",
+                            "detalhe": (
+                                f"Água (FLX) caiu {abs(round(var_agua, 1))}% mas ácido/cloro e pH se mantiveram estáveis. "
+                                f"Isso indica problema no sensor FLX, não redução real de consumo. "
+                                f"A CCD continua dosando normalmente, confirmando que o fluxo real não mudou."
+                            ),
+                        })
+                        result["recomendacoes"].append(
+                            "Visita técnica para verificar sensor FLX: possível obstrução, pá do rotor presa ou sensor com defeito."
+                        )
+                    elif agua_caiu_muito and not insumos_estavel:
+                        result["diagnosticos"].append({
+                            "tipo": "reducao_real_confirmada",
+                            "detalhe": (
+                                f"Água caiu {abs(round(var_agua, 1))}% e insumos também reduziram "
+                                f"(ácido {round(var_acido, 1)}%, cloro {round(var_cloro, 1)}%). "
+                                f"Indica mudança real no consumo (possível saída de lote, vazio sanitário)."
+                            ),
+                        })
+
+                    # Cross-validation litros FLX vs CCD
+                    if ccd_agua_map:
+                        diferencas = []
+                        for d in dias_comuns:
+                            if flx_map[d] > 0 and d in ccd_agua_map and ccd_agua_map[d] > 0:
+                                diff_pct = abs(flx_map[d] - ccd_agua_map[d]) / max(flx_map[d], ccd_agua_map[d]) * 100
+                                diferencas.append({"dia": d, "flx": flx_map[d], "ccd": ccd_agua_map[d], "diff_pct": round(diff_pct, 1)})
+
+                        anomalias_cross = [d for d in diferencas if d["diff_pct"] > 30]
+                        if anomalias_cross:
+                            result["diagnosticos"].append({
+                                "tipo": "divergencia_flx_ccd",
+                                "dias_divergentes": anomalias_cross[:5],
+                                "detalhe": f"{len(anomalias_cross)} dia(s) com divergência >30% entre FLX e CCD.",
+                            })
+
+            if not result["diagnosticos"]:
+                result["diagnosticos"].append({
+                    "tipo": "sem_anomalias",
+                    "detalhe": "Nenhuma inconsistência detectada entre os sensores no período analisado."
+                })
+
+        return result
+
+    except Exception as e:
+        log.error("Erro em validar_flx_vs_ccd", error=str(e))
+        return {"erro": str(e)}
+
+
 # =============================================================================
 # DEFINIÇÃO DAS FERRAMENTAS PARA O AGENTE
 # =============================================================================
@@ -2953,6 +3192,20 @@ TOOLS_Z1 = [
             "required": ["granja"],
         },
         function=analise_consumo_detalhada,
+    ),
+    Tool(
+        name="validar_flx_vs_ccd",
+        description="Valida o sensor de fluxo (FLX) cruzando com dados da central de dosagem (CCD). Compara consumo de água do FLX com dosagem de ácido/cloro, pH e ORP da CCD. Use quando: consumo de água caiu mas dosagem se manteve, suspeita de problema no sensor de fluxo, ou o usuário pede verificação do hidrometro/FLX. Detecta: FLX com obstrução ou teto (max travado), queda de leitura do FLX sem correspondência na CCD, e diferencia problema real de consumo vs defeito no sensor de fluxo.",
+        parameters={
+            "type": "object",
+            "properties": {
+                "granja": {"type": "string", "description": "Nome da granja"},
+                "dias": {"type": "integer", "description": "Período em dias (default: 14, máximo: 30)", "default": 14},
+                "data_inicio": {"type": "string", "description": "Data de início YYYY-MM-DD (opcional, calcula dias até hoje)"},
+            },
+            "required": ["granja"],
+        },
+        function=validar_flx_vs_ccd,
     ),
     Tool(
         name="relatorio_gas",
