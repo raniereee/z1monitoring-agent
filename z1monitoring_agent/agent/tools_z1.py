@@ -1537,7 +1537,7 @@ def consumo(granja: str, dias: int = 7, formato: str = "dados") -> dict:
         return {"erro": str(e)}
 
 
-def analise_consumo_detalhada(granja: str, dias: int = 10) -> dict:
+def analise_consumo_detalhada(granja: str, dias: int = 10, data_inicio: str = None) -> dict:
     """
     Análise detalhada de consumo de uma granja: consumo diário, perfil horário,
     períodos offline do FLX e variações significativas.
@@ -1545,6 +1545,7 @@ def analise_consumo_detalhada(granja: str, dias: int = 10) -> dict:
     Args:
         granja: Nome da granja
         dias: Período em dias (default: 10, máximo: 30)
+        data_inicio: Data de início no formato YYYY-MM-DD (opcional, se informado calcula dias até hoje)
 
     Returns:
         Dados analíticos completos para interpretação
@@ -1552,10 +1553,20 @@ def analise_consumo_detalhada(granja: str, dias: int = 10) -> dict:
     try:
         from z1monitoring_models.dbms import Session
         from sqlalchemy import text
+        from datetime import date
 
         farm = Farm.get_farm_like_sensibility(granja)
         if not farm:
             return {"erro": f"Granja '{granja}' não encontrada"}
+
+        if data_inicio:
+            try:
+                dt_inicio = date.fromisoformat(data_inicio)
+                dias = (date.today() - dt_inicio).days
+                if dias < 1:
+                    dias = 1
+            except ValueError:
+                pass
 
         if dias < 1 or dias > 30:
             dias = min(max(dias, 1), 30)
@@ -1585,14 +1596,32 @@ def analise_consumo_detalhada(granja: str, dias: int = 10) -> dict:
             # 2. Consumo diário de ácido e cloro (CCD ou Z1)
             plates = Plate.get_all({"farm_associated": farm.name})
             has_ccd = any(p.plate_type == "CCD" for p in plates)
+            has_z1 = any(p.plate_type == "Z1" for p in plates)
 
             if has_ccd:
                 daily_insumos = session.execute(text("""
                     SELECT
                         DATE(created_at) AS dia,
+                        ROUND(SUM(COALESCE((readings->>'Consumo Ácido Acumulado')::numeric, 0)), 1) AS acido_kg,
+                        ROUND(SUM(COALESCE((readings->>'Consumo Cloro Acumulado')::numeric, 0)), 1) AS cloro_kg
+                    FROM events_ccd
+                    WHERE farm ILIKE :farm
+                      AND created_at >= NOW() - INTERVAL :dias
+                    GROUP BY DATE(created_at)
+                    ORDER BY dia
+                """), {"farm": f"%{farm.name}%", "dias": f"{dias} days"}).fetchall()
+
+                result["consumo_insumos_diario"] = [
+                    {"dia": str(r[0]), "acido_kg": float(r[1] or 0), "cloro_kg": float(r[2] or 0)}
+                    for r in daily_insumos
+                ]
+            elif has_z1:
+                daily_insumos = session.execute(text("""
+                    SELECT
+                        DATE(created_at) AS dia,
                         ROUND(SUM(COALESCE((readings->>'acid_consumed_acc')::numeric, 0)), 1) AS acido_kg,
                         ROUND(SUM(COALESCE((readings->>'chlorine_consumed_acc')::numeric, 0)), 1) AS cloro_kg
-                    FROM events_ccd
+                    FROM events_z1
                     WHERE farm ILIKE :farm
                       AND created_at >= NOW() - INTERVAL :dias
                     GROUP BY DATE(created_at)
@@ -2919,6 +2948,7 @@ TOOLS_Z1 = [
             "properties": {
                 "granja": {"type": "string", "description": "Nome da granja"},
                 "dias": {"type": "integer", "description": "Período em dias (default: 10, máximo: 30)", "default": 10},
+                "data_inicio": {"type": "string", "description": "Data de início no formato YYYY-MM-DD. Se informado, calcula os dias até hoje automaticamente. Use quando o usuário especificar uma data de início."},
             },
             "required": ["granja"],
         },

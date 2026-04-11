@@ -39,6 +39,7 @@ class Agent:
         system_prompt: str,
         context: Optional[dict] = None,
         use_deep_model: bool = False,
+        message_history: Optional[List[dict]] = None,
     ):
         """
         Args:
@@ -46,12 +47,13 @@ class Agent:
             system_prompt: Prompt de sistema que define o comportamento
             context: Contexto adicional (dados do usuário, granja, etc)
             use_deep_model: Se True usa Sonnet (análise profunda), senão Haiku (rápido)
+            message_history: Histórico de mensagens anteriores [{"role": "user"|"assistant", "content": "..."}]
         """
         self.tools = {tool.name: tool for tool in tools}
         self.system_prompt = system_prompt
         self.context = context or {}
         self.model = MODEL_DEEP if use_deep_model else MODEL_FAST
-        self.messages = []  # Histórico da conversa
+        self.messages = list(message_history) if message_history else []
         self.total_input_tokens = 0
         self.total_output_tokens = 0
         self.api_calls = 0
