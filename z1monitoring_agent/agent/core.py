@@ -58,27 +58,44 @@ class Agent:
         self.total_output_tokens = 0
         self.api_calls = 0
 
-    def _build_system_prompt(self) -> str:
-        """Monta o prompt de sistema com contexto."""
-        prompt = self.system_prompt
+    def _build_system_prompt(self) -> list:
+        """
+        Monta o prompt de sistema como array de content blocks.
+        O prompt base é cacheável (estático), o contexto é dinâmico.
+        """
+        blocks = [
+            {
+                "type": "text",
+                "text": self.system_prompt,
+                "cache_control": {"type": "ephemeral"},
+            }
+        ]
 
         if self.context:
-            prompt += "\n\n## Contexto do usuário:\n"
+            context_text = "\n\n## Contexto do usuário:\n"
             for key, value in self.context.items():
-                prompt += f"- {key}: {value}\n"
+                context_text += f"- {key}: {value}\n"
+            blocks.append({"type": "text", "text": context_text})
 
-        return prompt
+        return blocks
 
     def _get_tools_schema(self) -> List[dict]:
-        """Retorna schema das tools no formato Anthropic."""
-        return [
-            {
+        """
+        Retorna schema das tools no formato Anthropic.
+        A última tool recebe cache_control para cachear todo o bloco de tools.
+        """
+        tools_list = list(self.tools.values())
+        schemas = []
+        for i, tool in enumerate(tools_list):
+            schema = {
                 "name": tool.name,
                 "description": tool.description,
                 "input_schema": tool.parameters,
             }
-            for tool in self.tools.values()
-        ]
+            if i == len(tools_list) - 1:
+                schema["cache_control"] = {"type": "ephemeral"}
+            schemas.append(schema)
+        return schemas
 
     def run(self, user_message: str, image_base64: Optional[str] = None, image_media_type: str = "image/jpeg") -> str:
         """
@@ -136,6 +153,10 @@ class Agent:
             if hasattr(response, 'usage') and response.usage:
                 self.total_input_tokens += response.usage.input_tokens
                 self.total_output_tokens += response.usage.output_tokens
+                cache_read = getattr(response.usage, 'cache_read_input_tokens', 0) or 0
+                cache_creation = getattr(response.usage, 'cache_creation_input_tokens', 0) or 0
+                if cache_read > 0 or cache_creation > 0:
+                    log.info("💾 Cache", read=cache_read, creation=cache_creation)
             self.api_calls += 1
 
             log.info("🤖 Agent resposta", stop_reason=response.stop_reason)
