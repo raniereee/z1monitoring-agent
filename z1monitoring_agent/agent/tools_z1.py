@@ -564,6 +564,10 @@ def analise(granja: str, tipo: str = "agua") -> dict:
                 if temp is not None:
                     result["temperatura"] = temp
 
+        topologia = _get_farm_topology(farm)
+        if topologia:
+            result["topologia_eta"] = topologia
+
         return result
 
     except Exception as e:
