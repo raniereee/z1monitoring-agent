@@ -30,6 +30,23 @@ from z1monitoring_models.models.plates_state import PlateState
 
 from z1monitoring_agent.utils.eta_dimensioning import calculate_eta, generate_pdf
 
+
+def _get_farm_topology(farm) -> dict:
+    """Extrai topologia semântica da farm para contexto do LLM."""
+    if not farm or not hasattr(farm, 'topology') or not farm.topology:
+        return None
+    topology = farm.topology
+    if not isinstance(topology, dict):
+        return None
+    circuito = topology.get("circuito")
+    if not circuito:
+        return None
+    result = {"circuito": circuito}
+    relacoes = topology.get("relacoes")
+    if relacoes:
+        result["relacoes"] = relacoes
+    return result
+
 # spaces_upload é injetado pelo app que usa o pacote
 spaces_upload = None
 
@@ -1519,7 +1536,7 @@ def consumo(granja: str, dias: int = 7, formato: str = "dados") -> dict:
         sorted_days = sorted(consumption_data.keys(), reverse=True)[:15]
         dados_por_dia = {day: consumption_data[day] for day in sorted_days}
 
-        return {
+        result = {
             "granja": farm.name,
             "periodo_dias": dias,
             "total_acido_kg": round(total_acido, 2),
@@ -1531,6 +1548,12 @@ def consumo(granja: str, dias: int = 7, formato: str = "dados") -> dict:
             "dias_com_dados": dias_com_dados,
             "dados_por_dia": dados_por_dia,
         }
+
+        topologia = _get_farm_topology(farm)
+        if topologia:
+            result["topologia_eta"] = topologia
+
+        return result
 
     except Exception as e:
         log.error("Erro ao consultar histórico de consumo", error=str(e))
@@ -1572,6 +1595,10 @@ def analise_consumo_detalhada(granja: str, dias: int = 10, data_inicio: str = No
             dias = min(max(dias, 1), 30)
 
         result = {"granja": farm.name, "periodo_dias": dias}
+
+        topologia = _get_farm_topology(farm)
+        if topologia:
+            result["topologia_eta"] = topologia
 
         with Session() as session:
             # 1. Consumo diário de água (FLX)
@@ -2700,6 +2727,10 @@ def validar_flx_vs_ccd(granja: str, dias: int = 14, data_inicio: str = None) -> 
             "diagnosticos": [],
             "recomendacoes": [],
         }
+
+        topologia = _get_farm_topology(farm)
+        if topologia:
+            result["topologia_eta"] = topologia
 
         with Session() as session:
             # 1. Consumo diário FLX
