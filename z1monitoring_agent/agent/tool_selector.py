@@ -31,11 +31,13 @@ TOOL_SETS = {
         "consultar_periodos_offline",
         "saude_empresa",
         "validar_flx_vs_ccd",
+        "descrever_eta",
     ],
     "tempo_real": [
         "tempo_real",
         "analise",
         "panorama_24h",
+        "descrever_eta",
     ],
     "ajuste_parametros": [
         "ajustar_faixa",

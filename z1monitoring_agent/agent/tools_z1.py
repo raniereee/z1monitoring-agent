@@ -2684,6 +2684,53 @@ def consultar_periodos_offline(granja: str, tipo_placa: str = None, dias: int = 
         return {"erro": str(e)}
 
 
+def descrever_eta(granja: str) -> dict:
+    """
+    Retorna a topologia da ETA de uma granja para o agente descrever
+    como a estação de tratamento está montada.
+
+    Args:
+        granja: Nome da granja
+    """
+    try:
+        farm = Farm.get_farm_like_sensibility(granja)
+        if not farm:
+            return {"erro": f"Granja '{granja}' não encontrada"}
+
+        plates = Plate.get_all({"farm_associated": farm.name})
+        equipamentos = [
+            {"serial": p.serial, "tipo": p.plate_type, "descricao": p.description or ""}
+            for p in plates
+        ]
+
+        topologia = _get_farm_topology(farm)
+        if not topologia:
+            return {
+                "granja": farm.name,
+                "equipamentos": equipamentos,
+                "topologia": None,
+                "mensagem": f"A granja {farm.name} possui {len(equipamentos)} equipamentos mas não tem topologia da ETA cadastrada. Não é possível descrever o circuito hidráulico.",
+            }
+
+        return {
+            "granja": farm.name,
+            "equipamentos": equipamentos,
+            "topologia_eta": topologia,
+            "instrucao": (
+                "Descreva o caminho da água na ETA em linguagem simples, "
+                "seguindo a ordem do circuito. Explique onde cada equipamento está "
+                "posicionado e qual sua função. Mencione a recirculação se houver. "
+                "Se houver ozônio externo, explique que é uma máquina não gerenciada "
+                "pelo sistema Z1. Relate as conexões de insumo (WGT → dosadoras) "
+                "e controle (CCD → dosadoras)."
+            ),
+        }
+
+    except Exception as e:
+        log.error("Erro em descrever_eta", error=str(e))
+        return {"erro": str(e)}
+
+
 def validar_flx_vs_ccd(granja: str, dias: int = 14, data_inicio: str = None) -> dict:
     """
     Diagnóstico cruzado de sensores: compara dados de FLX vs CCD para detectar
@@ -3227,6 +3274,18 @@ TOOLS_Z1 = [
             "required": ["granja"],
         },
         function=analise_consumo_detalhada,
+    ),
+    Tool(
+        name="descrever_eta",
+        description="Descreve como a ETA (estação de tratamento de água) de uma granja está montada: o caminho da água, posição dos sensores, dosadoras, recirculação, ozônio. Use quando o usuário perguntar como a ETA está montada, qual o circuito, ou pedir descrição da instalação.",
+        parameters={
+            "type": "object",
+            "properties": {
+                "granja": {"type": "string", "description": "Nome da granja"},
+            },
+            "required": ["granja"],
+        },
+        function=descrever_eta,
     ),
     Tool(
         name="validar_flx_vs_ccd",
