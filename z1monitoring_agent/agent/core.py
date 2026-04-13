@@ -143,7 +143,7 @@ class Agent:
             # Chama o LLM
             response = client.messages.create(
                 model=self.model,
-                max_tokens=1024,
+                max_tokens=2048,
                 system=self._build_system_prompt(),
                 tools=self._get_tools_schema(),
                 messages=self.messages,
@@ -214,6 +214,15 @@ class Agent:
                         "content": tool_results,
                     }
                 )
+
+            elif response.stop_reason == "max_tokens":
+                # Resposta cortada por limite de tokens — enviar o que tem
+                text_response = self._extract_text(response)
+                if text_response:
+                    log.info("🤖 Agent resposta truncada (max_tokens)", resposta=text_response[:100])
+                    return text_response
+                log.warning("🤖 Agent max_tokens sem texto")
+                return "Desculpe, a resposta ficou muito longa. Tente ser mais específico."
 
             else:
                 # Resposta inesperada

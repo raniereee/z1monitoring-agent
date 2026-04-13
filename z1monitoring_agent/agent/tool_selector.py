@@ -56,6 +56,7 @@ TOOL_SETS = {
     "relatorios": [
         "consumo",
         "analise_consumo_detalhada",
+        "descrever_eta",
         "validar_flx_vs_ccd",
         "relatorio_gas",
         "ranking_granjas",
