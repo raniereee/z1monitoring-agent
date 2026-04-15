@@ -19,7 +19,7 @@ client = anthropic.Anthropic()
 # Configurações
 MAX_ITERATIONS = 7  # Evita loops infinitos e gasto desnecessário de tokens
 MODEL_FAST = "claude-haiku-4-5-20251001"
-MODEL_DEEP = "claude-sonnet-4-6-20250514"
+MODEL_DEEP = "claude-sonnet-4-6"
 
 
 class Agent:
