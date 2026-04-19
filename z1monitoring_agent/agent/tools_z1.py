@@ -96,6 +96,98 @@ def get_user_context() -> Optional[UserContext]:
     return _current_context
 
 
+_PRIMARY_PERM_NAMES = {
+    "PRIMARY",
+    "ETA_REPRESENTANTES",
+    "ETA_REPRESENTANTES_ADMIN",
+    "ETA_REPRESENTANTES_TEC",
+    "URBANO_REPRESENTANTES",
+    "ETA_VENDEDOR",
+    "ETA_READONLY",
+}
+
+_READONLY_PERM_NAMES = {"ETA_READONLY"}
+
+
+def _get_allowed_farm_names(ctx):
+    """
+    Retorna a lista de nomes de farms que o usuário tem acesso.
+    Retorna None quando é ADMIN (sem filtro).
+    """
+    if not ctx or ctx.is_admin:
+        return None
+    if ctx.permission_name in _PRIMARY_PERM_NAMES:
+        farms = Farm.get_all_that_associated_allowed_permitted(ctx.associated)
+    else:
+        farms = Farm.get_all_farms_objs_filtereds({"owner": ctx.associated})
+    return [f.name for f in farms]
+
+
+def _enforce_farm_access(farm):
+    """Retorna a farm se o user tem acesso, None caso contrario."""
+    if not farm:
+        return None
+    ctx = get_user_context()
+    if not ctx or ctx.is_admin:
+        return farm
+    allowed = _get_allowed_farm_names(ctx) or []
+    if farm.name in allowed:
+        return farm
+    log.warning(
+        "Tentativa de acesso a granja sem permissao (bloqueada)",
+        farm=farm.name,
+        user=ctx.user.name if ctx.user else None,
+        associated=ctx.associated,
+        permission=ctx.permission_name,
+    )
+    return None
+
+
+def _can_write(ctx) -> bool:
+    """Retorna True se o usuário pode executar ações de escrita."""
+    if not ctx:
+        return False
+    return ctx.permission_name not in _READONLY_PERM_NAMES
+
+
+def _readonly_response(farm_name: str = None) -> dict:
+    """Resposta padronizada quando usuário read-only tenta acao."""
+    local_txt = f" em {farm_name}" if farm_name else ""
+    return {
+        "erro": "acesso_somente_leitura",
+        "mensagem": (
+            f"👁️ Sua conta é somente leitura. Ações de escrita{local_txt} "
+            "devem ser executadas pelo responsável técnico."
+        ),
+    }
+
+
+def _require_write(fn):
+    """Decorator que bloqueia execução de tool de escrita para read-only."""
+    from functools import wraps
+
+    @wraps(fn)
+    def wrapper(*args, **kwargs):
+        ctx = get_user_context()
+        if not _can_write(ctx):
+            log.warning(
+                "Tool de escrita bloqueada para usuario read-only",
+                tool=fn.__name__,
+                user=ctx.user.name if ctx and ctx.user else None,
+                permission=ctx.permission_name if ctx else None,
+            )
+            return _readonly_response()
+        return fn(*args, **kwargs)
+
+    return wrapper
+
+
+def _resolve_farm_acl(nome):
+    """Wrapper de Farm.get_farm_like_sensibility que aplica ACL por escopo do user."""
+    farm = Farm.get_farm_like_sensibility(nome)
+    return _enforce_farm_access(farm)
+
+
 # =============================================================================
 # 1. STATUS E CONSULTAS
 # =============================================================================
@@ -143,12 +235,23 @@ def consultar_alarmes(granja: str = None, dias: int = 1) -> dict:
         Lista de alarmes encontrados
     """
     try:
+        ctx = get_user_context()
         data_inicio = datetime.now() - timedelta(days=dias)
+        allowed_farm_names = _get_allowed_farm_names(ctx)
 
         if granja:
+            if allowed_farm_names is not None and granja not in allowed_farm_names:
+                return {
+                    "encontrados": 0,
+                    "mensagem": "Você não tem acesso a esta granja.",
+                    "alarmes": [],
+                }
             alarmes = UrgentAlarm.get_by_farm_and_date(granja, data_inicio)
         else:
             alarmes = UrgentAlarm.get_recent(data_inicio)
+            if allowed_farm_names is not None:
+                allowed_set = set(allowed_farm_names)
+                alarmes = [a for a in alarmes if a.farm in allowed_set]
 
         if not alarmes:
             return {
@@ -428,7 +531,7 @@ def tempo_real(granja: str, sensor: str = "geral") -> dict:
         Leituras do sensor solicitado
     """
     try:
-        farm = Farm.get_farm_like_sensibility(granja)
+        farm = _resolve_farm_acl(granja)
         if not farm:
             return {"erro": f"Granja '{granja}' não encontrada"}
 
@@ -513,7 +616,7 @@ def analise(granja: str, tipo: str = "agua") -> dict:
         Análise do tipo solicitado
     """
     try:
-        farm = Farm.get_farm_like_sensibility(granja)
+        farm = _resolve_farm_acl(granja)
         if not farm:
             return {"erro": f"Granja '{granja}' não encontrada"}
 
@@ -833,9 +936,15 @@ def _normalize_text(text: str) -> str:
 
 
 def _get_farm_candidates(nome: str) -> list:
-    """Retorna todas as granjas que batem por substring com o nome dado."""
+    """Retorna todas as granjas que batem por substring com o nome dado,
+    respeitando o escopo de acesso do usuário."""
     try:
         all_farms = Farm.get_all_farms_objs_filtereds({})
+        ctx = get_user_context()
+        if ctx and not ctx.is_admin:
+            allowed = set(_get_allowed_farm_names(ctx) or [])
+            all_farms = [f for f in all_farms if f.name in allowed]
+
         nome_norm = _normalize_text(nome)
         candidates = []
         for f in all_farms:
@@ -864,7 +973,7 @@ def buscar_granja(nome: str) -> dict:
 
         if len(candidates) == 0:
             # Tenta fuzzy match
-            farm = Farm.get_farm_like_sensibility(nome)
+            farm = _resolve_farm_acl(nome)
             if not farm:
                 return {"encontrada": False, "mensagem": f"Granja '{nome}' não encontrada"}
             candidates = [farm.name]
@@ -878,7 +987,7 @@ def buscar_granja(nome: str) -> dict:
             }
 
         farm_name = candidates[0]
-        farm = Farm.get_farm_like_sensibility(farm_name)
+        farm = _resolve_farm_acl(farm_name)
         if not farm:
             return {"encontrada": False, "mensagem": f"Granja '{nome}' não encontrada"}
 
@@ -906,13 +1015,14 @@ def listar_granjas_usuario() -> dict:
     """
     ctx = get_user_context()
     try:
-        if ctx and ctx.is_admin:
-            # Admin vê todas - usa método que retorna objetos
-            farms = Farm.get_all_farms_objs_filtereds({})
-        elif ctx:
-            farms = Farm.get_all_farms_objs_filtereds({"owner": ctx.associated})
-        else:
+        if not ctx:
             return {"erro": "Contexto de usuário não disponível"}
+        if ctx.is_admin:
+            farms = Farm.get_all_farms_objs_filtereds({})
+        elif ctx.permission_name in _PRIMARY_PERM_NAMES:
+            farms = Farm.get_all_that_associated_allowed_permitted(ctx.associated)
+        else:
+            farms = Farm.get_all_farms_objs_filtereds({"owner": ctx.associated})
 
         if not farms:
             return {"total": 0, "granjas": [], "mensagem": "Nenhuma granja encontrada"}
@@ -935,6 +1045,7 @@ def listar_granjas_usuario() -> dict:
 # =============================================================================
 
 
+@_require_write
 def ajustar_faixa(granja: str, sensor: str, valor_min: float, valor_max: float) -> dict:
     """
     Ajusta a faixa de um sensor (pH ou ORP) de uma granja.
@@ -957,7 +1068,7 @@ def ajustar_faixa(granja: str, sensor: str, valor_min: float, valor_max: float) 
         if sensor == "orp" and (valor_min < 0 or valor_max > 1500):
             return {"erro": "ORP deve estar entre 0 e 1500 mV"}
 
-        farm = Farm.get_farm_like_sensibility(granja)
+        farm = _resolve_farm_acl(granja)
         if not farm:
             return {"erro": f"Granja '{granja}' não encontrada"}
 
@@ -976,6 +1087,7 @@ def ajustar_faixa(granja: str, sensor: str, valor_min: float, valor_max: float) 
         return {"erro": str(e)}
 
 
+@_require_write
 def controlar_dosadora(granja: str, dosadora: str, acao: str) -> dict:
     """
     Controla uma dosadora (ligar/desligar ou mudar modo).
@@ -995,7 +1107,7 @@ def controlar_dosadora(granja: str, dosadora: str, acao: str) -> dict:
         if acao not in ["ligar", "desligar", "automatico", "ciclico"]:
             return {"erro": "Ação deve ser 'ligar', 'desligar', 'automatico' ou 'ciclico'"}
 
-        farm = Farm.get_farm_like_sensibility(granja)
+        farm = _resolve_farm_acl(granja)
         if not farm:
             return {"erro": f"Granja '{granja}' não encontrada"}
 
@@ -1012,6 +1124,7 @@ def controlar_dosadora(granja: str, dosadora: str, acao: str) -> dict:
         return {"erro": str(e)}
 
 
+@_require_write
 def controlar_abs(granja: str, dosadora: str, acao: str) -> dict:
     """
     Controla o ABS (freio automático de limite 24h) de ácido ou cloro.
@@ -1028,7 +1141,7 @@ def controlar_abs(granja: str, dosadora: str, acao: str) -> dict:
         if dosadora not in ["acido", "cloro"]:
             return {"erro": "Dosadora deve ser 'acido' ou 'cloro'"}
 
-        farm = Farm.get_farm_like_sensibility(granja)
+        farm = _resolve_farm_acl(granja)
         if not farm:
             return {"erro": f"Granja '{granja}' não encontrada"}
 
@@ -1059,6 +1172,7 @@ def controlar_abs(granja: str, dosadora: str, acao: str) -> dict:
         return {"erro": str(e)}
 
 
+@_require_write
 def definir_limite_24h(granja: str, dosadora: str, limite_kg: float) -> dict:
     """
     Define o limite de consumo em 24h para uma dosadora (ABS).
@@ -1084,7 +1198,7 @@ def definir_limite_24h(granja: str, dosadora: str, limite_kg: float) -> dict:
         if limite_kg > 100:
             return {"erro": "Limite máximo é 100 kg"}
 
-        farm = Farm.get_farm_like_sensibility(granja)
+        farm = _resolve_farm_acl(granja)
         if not farm:
             return {"erro": f"Granja '{granja}' não encontrada"}
 
@@ -1106,6 +1220,7 @@ DRYER_TEMP_MIN = 20
 DRYER_TEMP_MAX = 80
 
 
+@_require_write
 def ajustar_oz1(
     granja: str,
     celula_ligada: bool = None,
@@ -1129,7 +1244,7 @@ def ajustar_oz1(
         Confirmação do ajuste solicitado
     """
     try:
-        farm = Farm.get_farm_like_sensibility(granja)
+        farm = _resolve_farm_acl(granja)
         if not farm:
             return {"erro": f"Granja '{granja}' não encontrada"}
 
@@ -1231,6 +1346,7 @@ def ajustar_oz1(
 # =============================================================================
 
 
+@_require_write
 def controlar_alarme_galpao(granja: str, acao: str, galpao: str = None) -> dict:
     """
     Habilita ou desabilita alarmes de um galpão.
@@ -1244,7 +1360,7 @@ def controlar_alarme_galpao(granja: str, acao: str, galpao: str = None) -> dict:
         Confirmação da ação
     """
     try:
-        farm = Farm.get_farm_like_sensibility(granja)
+        farm = _resolve_farm_acl(granja)
         if not farm:
             return {"erro": f"Granja '{granja}' não encontrada"}
 
@@ -1420,7 +1536,7 @@ def consumo(granja: str, dias: int = 7, formato: str = "dados") -> dict:
         try:
             from z1monitoring_agent.utils import commons_actions
 
-            farm = Farm.get_farm_like_sensibility(granja)
+            farm = _resolve_farm_acl(granja)
             if not farm:
                 return {"erro": f"Granja '{granja}' não encontrada"}
 
@@ -1456,7 +1572,7 @@ def consumo(granja: str, dias: int = 7, formato: str = "dados") -> dict:
         from datetime import timedelta
         from z1monitoring_models.models.choose_event_model import get_events_model
 
-        farm = Farm.get_farm_like_sensibility(granja)
+        farm = _resolve_farm_acl(granja)
         if not farm:
             return {"erro": f"Granja '{granja}' não encontrada"}
 
@@ -1582,7 +1698,7 @@ def analise_consumo_detalhada(granja: str, dias: int = 10, data_inicio: str = No
         from sqlalchemy import text
         from datetime import date
 
-        farm = Farm.get_farm_like_sensibility(granja)
+        farm = _resolve_farm_acl(granja)
         if not farm:
             return {"erro": f"Granja '{granja}' não encontrada"}
 
@@ -1760,7 +1876,7 @@ def relatorio_gas(tipo: str = "consumo", granja: str = None) -> dict:
 
             farm_name = "TODOS"
             if granja:
-                farm = Farm.get_farm_like_sensibility(granja)
+                farm = _resolve_farm_acl(granja)
                 if not farm:
                     return {"erro": f"Granja '{granja}' não encontrada"}
                 farm_name = farm.name
@@ -1880,7 +1996,7 @@ def panorama_24h(granja: str = None) -> dict:
     """
     try:
         if granja:
-            farm = Farm.get_farm_like_sensibility(granja)
+            farm = _resolve_farm_acl(granja)
             if not farm:
                 return {"erro": f"Granja '{granja}' não encontrada"}
             farm_name = farm.name
@@ -1903,6 +2019,7 @@ def panorama_24h(granja: str = None) -> dict:
 # =============================================================================
 
 
+@_require_write
 def controlar_saida(granja: str, saida: str, acao: str) -> dict:
     """
     Liga ou desliga uma saída (bomba, válvula, motor, etc).
@@ -1916,7 +2033,7 @@ def controlar_saida(granja: str, saida: str, acao: str) -> dict:
         Confirmação da ação solicitada
     """
     try:
-        farm = Farm.get_farm_like_sensibility(granja)
+        farm = _resolve_farm_acl(granja)
         if not farm:
             return {"erro": f"Granja '{granja}' não encontrada"}
 
@@ -1981,6 +2098,7 @@ def consultar_quadros_com_problema() -> dict:
 # =============================================================================
 
 
+@_require_write
 def controlar_lote(granja: str, acao: str, galpao: str = None) -> dict:
     """
     Inicia ou finaliza um lote em uma granja/galpão.
@@ -1994,7 +2112,7 @@ def controlar_lote(granja: str, acao: str, galpao: str = None) -> dict:
         Solicitação de controle de lote
     """
     try:
-        farm = Farm.get_farm_like_sensibility(granja)
+        farm = _resolve_farm_acl(granja)
         if not farm:
             return {"erro": f"Granja '{granja}' não encontrada"}
 
@@ -2017,6 +2135,7 @@ def controlar_lote(granja: str, acao: str, galpao: str = None) -> dict:
 # =============================================================================
 
 
+@_require_write
 def registrar_visita(granja: str, motivo: str = None, observacoes: str = None) -> dict:
     """
     Registra uma visita técnica em uma granja.
@@ -2030,7 +2149,7 @@ def registrar_visita(granja: str, motivo: str = None, observacoes: str = None) -
         Solicitação de registro de visita
     """
     try:
-        farm = Farm.get_farm_like_sensibility(granja)
+        farm = _resolve_farm_acl(granja)
         if not farm:
             return {"erro": f"Granja '{granja}' não encontrada"}
 
@@ -2050,23 +2169,6 @@ def registrar_visita(granja: str, motivo: str = None, observacoes: str = None) -
     except Exception as e:
         log.error("Erro ao registrar visita", error=str(e))
         return {"erro": str(e)}
-
-
-# =============================================================================
-# 12. PRÉ-CADASTRO
-# =============================================================================
-
-
-# def iniciar_pre_cadastro() -> dict:
-#     """Inicia o processo de pré-cadastro de um novo cliente/equipamento."""
-#     return {
-#         "acao": "iniciar_pre_cadastro",
-#         "mensagem": "Iniciando pré-cadastro. Vou precisar de algumas informações.",
-#     }
-
-# def adicionar_equipamento_pre_cadastro(serial: str) -> dict:
-#     """Adiciona um equipamento ao pré-cadastro pelo número serial."""
-#     pass
 
 
 # =============================================================================
@@ -2209,6 +2311,7 @@ def enviar_botoes_confirmacao(mensagem: str, botoes: list) -> dict:
 # =============================================================================
 
 
+@_require_write
 def confirmar_ajuste_parametro(
     granja: str,
     ph_min: float = None,
@@ -2242,7 +2345,7 @@ def confirmar_ajuste_parametro(
         }
 
     try:
-        farm = Farm.get_farm_like_sensibility(granja)
+        farm = _resolve_farm_acl(granja)
         if not farm:
             return {"erro": f"Granja '{granja}' não encontrada"}
 
@@ -2693,7 +2796,7 @@ def descrever_eta(granja: str) -> dict:
         granja: Nome da granja
     """
     try:
-        farm = Farm.get_farm_like_sensibility(granja)
+        farm = _resolve_farm_acl(granja)
         if not farm:
             return {"erro": f"Granja '{granja}' não encontrada"}
 
@@ -2747,7 +2850,7 @@ def validar_flx_vs_ccd(granja: str, dias: int = 14, data_inicio: str = None) -> 
         from datetime import date
         from statistics import median
 
-        farm = Farm.get_farm_like_sensibility(granja)
+        farm = _resolve_farm_acl(granja)
         if not farm:
             return {"erro": f"Granja '{granja}' não encontrada"}
 
@@ -3389,10 +3492,7 @@ TOOLS_Z1 = [
         },
         function=registrar_visita,
     ),
-    # ===== PRÉ-CADASTRO =====
-    # Tool pre-cadastro comentada - não está em uso
-    # Tool(name="iniciar_pre_cadastro", ...),
-    # Tool(name="adicionar_equipamento_pre_cadastro", ...),
+
     # ===== DIMENSIONAMENTO ETA =====
     Tool(
         name="dimensionar_eta",
