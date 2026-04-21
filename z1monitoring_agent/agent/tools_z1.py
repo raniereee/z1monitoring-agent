@@ -188,6 +188,66 @@ def _resolve_farm_acl(nome):
     return _enforce_farm_access(farm)
 
 
+_PLATE_TYPE_CATEGORIA = {
+    "IOX": "ambiencia e quadros de comandos",
+    "IOC": "ambiencia",
+    "Z1": "agua",
+    "PHI": "agua",
+    "ORP": "agua",
+    "FLX": "agua",
+    "NVL": "agua",
+    "CCD": "agua",
+    "OZ1": "agua",
+    "WGT": "insumos",
+    "CLPCG": "ambiencia",
+    "QP4": "quadro",
+    "QP7": "quadro",
+    "QBT": "quadro",
+    "QBT_CIS": "quadro",
+}
+
+
+def _plates_by_serials(serials):
+    """Busca placas por lista de seriais. Retorna dict {serial: plate}."""
+    result = {}
+    for s in set(s for s in serials if s):
+        try:
+            matches = Plate.get_all({"serial": s}) or []
+            if matches:
+                result[s] = matches[0]
+        except Exception:
+            pass
+    return result
+
+
+def _enrich_alarm(alarme, plate_map: dict = None) -> dict:
+    """Enriquece um UrgentAlarm com plate_type, categoria e descrição da placa.
+
+    A categoria existe para o LLM NÃO confundir domínios — um alarme de IOX
+    (cortinas, ventilação, galpão) não tem relação com ABS/ácido/cloro/dosagem.
+    """
+    plate_type = None
+    plate_descr = None
+    serial = getattr(alarme, "serial", None)
+    if serial and plate_map is not None:
+        plate = plate_map.get(serial)
+        if plate:
+            plate_type = plate.plate_type
+            plate_descr = plate.description
+    categoria = _PLATE_TYPE_CATEGORIA.get(plate_type, "outro") if plate_type else "outro"
+    return {
+        "granja": alarme.farm,
+        "serial": serial,
+        "plate_type": plate_type,
+        "plate_descricao": plate_descr,
+        "categoria": categoria,
+        "sensor": alarme.sensor,
+        "status": alarme.status,
+        "atendido": alarme.attended,
+        "data": alarme.created_at.strftime("%d/%m %H:%M") if alarme.created_at else None,
+    }
+
+
 # =============================================================================
 # 1. STATUS E CONSULTAS
 # =============================================================================
@@ -260,17 +320,9 @@ def consultar_alarmes(granja: str = None, dias: int = 1) -> dict:
                 "alarmes": [],
             }
 
-        alarmes_formatados = []
-        for alarme in alarmes[:10]:
-            alarmes_formatados.append(
-                {
-                    "granja": alarme.farm,
-                    "sensor": alarme.sensor,
-                    "status": alarme.status,
-                    "atendido": alarme.attended,
-                    "data": alarme.created_at.strftime("%d/%m %H:%M") if alarme.created_at else None,
-                }
-            )
+        top = alarmes[:10]
+        plate_map = _plates_by_serials([getattr(a, "serial", None) for a in top])
+        alarmes_formatados = [_enrich_alarm(a, plate_map) for a in top]
 
         return {
             "encontrados": len(alarmes),
@@ -1986,28 +2038,145 @@ def ranking_granjas(dias: int = 7) -> dict:
 
 def panorama_24h(granja: str = None) -> dict:
     """
-    Obtém panorama das últimas 24 horas de uma granja ou todas.
+    Obtém panorama das últimas 24 horas: placas online/offline, alarmes,
+    consumo de ácido/cloro e leituras atuais de pH/ORP por granja.
 
     Args:
-        granja: Nome da granja (opcional, se não informado mostra todas)
+        granja: Nome da granja (opcional). Se omitido, cobre todas as granjas
+                que o usuário tem acesso (limitado a 15 para admins).
 
     Returns:
-        Panorama 24h com status de todos os sensores
+        Dados reais extraídos do banco. NÃO inferir nem inventar valores fora
+        deste retorno — se um campo não está presente, é porque não há dado.
     """
     try:
+        from z1monitoring_models.models.choose_event_model import get_events_model
+
+        ctx = get_user_context()
+        now = datetime.now()
+        inicio = now - timedelta(hours=24)
+        truncated_admin = False
+
         if granja:
             farm = _resolve_farm_acl(granja)
             if not farm:
                 return {"erro": f"Granja '{granja}' não encontrada"}
-            farm_name = farm.name
+            target_farm_names = [farm.name]
         else:
-            farm_name = None
+            allowed = _get_allowed_farm_names(ctx)
+            if allowed is None:
+                farms_all = Farm.get_all_farms_objs_filtereds({})
+                target_farm_names = [f.name for f in farms_all[:15]]
+                truncated_admin = len(farms_all) > 15
+            else:
+                target_farm_names = allowed
 
-        return {
-            "acao": "panorama_24h",
-            "granja": farm_name,
-            "mensagem": f"Gerando panorama 24h{' de ' + farm_name if farm_name else ''}...",
+        if not target_farm_names:
+            return {"erro": "Nenhuma granja acessível no escopo do usuário"}
+
+        alarmes_recentes = UrgentAlarm.get_recent(inicio) or []
+        alarmes_do_escopo = [a for a in alarmes_recentes if a.farm in target_farm_names]
+        plate_map = _plates_by_serials([getattr(a, "serial", None) for a in alarmes_do_escopo])
+        alarmes_por_farm = {}
+        for a in alarmes_do_escopo:
+            enriched = _enrich_alarm(a, plate_map)
+            alarmes_por_farm.setdefault(a.farm, []).append({
+                k: v for k, v in enriched.items() if k != "granja"
+            })
+
+        date_upper = now.strftime("%Y-%m-%d %H:%M:%S")
+        date_lower = inicio.strftime("%Y-%m-%d %H:%M:%S")
+
+        granjas_resumo = []
+        for farm_name in target_farm_names:
+            plates = Plate.get_all({"farm_associated": farm_name})
+            if not plates:
+                continue
+
+            online = sum(1 for p in plates if p.have_communication)
+            offline = len(plates) - online
+            tipos = sorted({p.plate_type for p in plates})
+
+            farm_data = {
+                "granja": farm_name,
+                "placas_total": len(plates),
+                "placas_online": online,
+                "placas_offline": offline,
+                "tipos_equipamento": tipos,
+                "alarmes_24h": len(alarmes_por_farm.get(farm_name, [])),
+            }
+
+            offline_list = [
+                {"serial": p.serial, "tipo": p.plate_type}
+                for p in plates if not p.have_communication
+            ]
+            if offline_list:
+                farm_data["placas_offline_detalhe"] = offline_list[:10]
+
+            for p in plates:
+                if p.plate_type not in ["Z1", "PHI", "ORP", "CCD"]:
+                    continue
+                sv = p.sensors_value or {}
+                if "ph" not in farm_data:
+                    ph = sv.get("ph") or sv.get("PH")
+                    if ph is not None:
+                        farm_data["ph"] = ph
+                if "orp" not in farm_data:
+                    orp = sv.get("orp") or sv.get("ORP")
+                    if orp is not None:
+                        farm_data["orp"] = orp
+                if "temperatura" not in farm_data:
+                    temp = sv.get("temperature") or sv.get("Temperatura da Água")
+                    if temp is not None:
+                        farm_data["temperatura"] = temp
+
+            has_ccd = any(p.plate_type == "CCD" for p in plates)
+            has_z1 = any(p.plate_type == "Z1" for p in plates)
+            if has_ccd or has_z1:
+                try:
+                    _Event = get_events_model("CCD" if has_ccd else "Z1")
+                    events = _Event.get_insumes_consumed_last_days(farm_name, date_lower, date_upper) or []
+                    acido = sum(float(getattr(e, "acid_consumed_acc", 0) or 0) for e in events)
+                    cloro = sum(float(getattr(e, "chlorine_consumed_acc", 0) or 0) for e in events)
+                    if acido > 0:
+                        farm_data["acido_kg_24h"] = round(acido, 2)
+                    if cloro > 0:
+                        farm_data["cloro_kg_24h"] = round(cloro, 2)
+                except Exception as e:
+                    log.warning("Falha ao calcular consumo 24h", farm=farm_name, error=str(e))
+
+            if alarmes_por_farm.get(farm_name):
+                farm_data["alarmes_detalhe"] = alarmes_por_farm[farm_name][:5]
+
+            granjas_resumo.append(farm_data)
+
+        if not granjas_resumo:
+            return {
+                "periodo": "ultimas_24h",
+                "granjas_analisadas": 0,
+                "mensagem": "Nenhuma placa encontrada nas granjas do escopo do usuário.",
+            }
+
+        total_placas = sum(f["placas_total"] for f in granjas_resumo)
+        total_online = sum(f["placas_online"] for f in granjas_resumo)
+        total_offline = sum(f["placas_offline"] for f in granjas_resumo)
+        total_alarmes = sum(f["alarmes_24h"] for f in granjas_resumo)
+
+        result = {
+            "periodo": "ultimas_24h",
+            "gerado_em": now.strftime("%d/%m/%Y %H:%M"),
+            "granjas_analisadas": len(granjas_resumo),
+            "placas_total": total_placas,
+            "placas_online": total_online,
+            "placas_offline": total_offline,
+            "alarmes_24h_total": total_alarmes,
+            "granjas": granjas_resumo,
         }
+        if granja:
+            result["granja_filtrada"] = target_farm_names[0]
+        if truncated_admin:
+            result["observacao"] = "Admin com >15 granjas: resultado limitado às 15 primeiras."
+        return result
 
     except Exception as e:
         log.error("Erro ao gerar panorama", error=str(e))
@@ -3431,11 +3600,16 @@ TOOLS_Z1 = [
     ),
     Tool(
         name="panorama_24h",
-        description="Obtém panorama das últimas 24 horas com status de todos os sensores.",
+        description=(
+            "Panorama das últimas 24h: placas online/offline, alarmes, consumo de "
+            "ácido/cloro e leituras atuais de pH/ORP/temperatura, por granja. "
+            "Use os dados EXATOS que vierem no retorno — NÃO invente granjas, "
+            "sensores, valores ou alertas que não estejam no payload."
+        ),
         parameters={
             "type": "object",
             "properties": {
-                "granja": {"type": "string", "description": "Nome da granja (opcional)"},
+                "granja": {"type": "string", "description": "Nome da granja (opcional, filtra a apenas uma)"},
             },
             "required": [],
         },
