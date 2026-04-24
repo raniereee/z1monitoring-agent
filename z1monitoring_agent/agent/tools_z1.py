@@ -32,6 +32,24 @@ from z1monitoring_agent.utils.eta_dimensioning import calculate_eta, generate_pd
 from z1monitoring_agent.agent.eta_timeline import condense_eta_timeline
 
 
+def _normalize_circuito_keys(circuito):
+    """Traduz `recircula_para` legado pra `fluxo_segue_para_posicao`.
+    Nome novo e literal: "a saida deste node segue pra posicao N". O node
+    em si NAO esta em recirculacao — so entrega agua pra um node destino
+    que recircula internamente. Nome antigo induzia interpretacao errada
+    pelo LLM.
+    """
+    if not isinstance(circuito, list):
+        return circuito
+    for node in circuito:
+        if isinstance(node, dict) and "recircula_para" in node:
+            node.setdefault(
+                "fluxo_segue_para_posicao", node["recircula_para"]
+            )
+            del node["recircula_para"]
+    return circuito
+
+
 def _get_farm_topology(farm) -> dict:
     """Extrai topologia semântica da farm para contexto do LLM."""
     if not farm or not hasattr(farm, 'topology') or not farm.topology:
@@ -42,7 +60,7 @@ def _get_farm_topology(farm) -> dict:
     circuito = topology.get("circuito")
     if not circuito:
         return None
-    result = {"circuito": circuito}
+    result = {"circuito": _normalize_circuito_keys(list(circuito))}
     relacoes = topology.get("relacoes")
     if relacoes:
         result["relacoes"] = relacoes

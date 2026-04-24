@@ -147,7 +147,7 @@ Quando presente, USE a topologia para:
 1. Correlacionar a posição dos sensores no circuito (ex: FLX antes da caixa de tratamento = mede entrada de água bruta)
 2. Entender que a CCD é a central que controla as dosadoras de ácido e cloro
 3. Se houver "ozonio_externo" no circuito, é uma máquina de ozônio sem dados no sistema que AUMENTA o ORP — considere isso ao analisar leituras de ORP acima do esperado
-4. A recirculação (recircula_para) indica que a água volta para a caixa de tratamento após passar pela dosagem e medição, até atingir pH/ORP alvo
+4. O campo "fluxo_segue_para_posicao" num node indica que a ÁGUA QUE SAI dele entra num ponto que recircula internamente (ex: caixa de tratamento). O node em si NÃO está em recirculação — ele está no caminho linear do fluxo, entregando água que depois dele vira loop. Exemplo: FLX com fluxo_segue_para_posicao=2 mede ENTRADA da caixa de tratamento (não recirculação interna)
 5. Relações de "insumo" (WGT → dosadoras) indicam de onde vêm os químicos
 6. Se o FLX está antes da caixa de tratamento e mostra queda mas a CCD continua dosando igual, provável problema no sensor FLX (não no consumo real)
 
