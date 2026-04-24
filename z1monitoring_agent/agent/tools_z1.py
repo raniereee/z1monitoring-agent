@@ -29,6 +29,7 @@ from z1monitoring_models.models.changes_requests import ChangesRequests
 from z1monitoring_models.models.plates_state import PlateState
 
 from z1monitoring_agent.utils.eta_dimensioning import calculate_eta, generate_pdf
+from z1monitoring_agent.agent.eta_timeline import condense_eta_timeline
 
 
 def _get_farm_topology(farm) -> dict:
@@ -46,6 +47,29 @@ def _get_farm_topology(farm) -> dict:
     if relacoes:
         result["relacoes"] = relacoes
     return result
+
+
+def _inject_eta_timeline(result: dict, farm, window_hours: int = 24):
+    """Anexa timeline 24h condensada (IOX + CCD/periféricos) ao result.
+    Usado em tools analíticas que já enriquecem com topologia_eta.
+    """
+    if not farm or not getattr(farm, "id", None):
+        return
+    try:
+        timeline = condense_eta_timeline(farm.id, window_hours=window_hours)
+    except Exception as e:
+        import structlog as _sl
+        _sl.get_logger().warning(
+            "Falha ao montar timeline ETA",
+            farm=getattr(farm, "name", None),
+            error=str(e),
+        )
+        return
+    if timeline.get("timeline_24h"):
+        result["timeline_24h"] = timeline["timeline_24h"]
+    if timeline.get("iox_estado_atual"):
+        result["iox_estado_atual"] = timeline["iox_estado_atual"]
+
 
 # spaces_upload é injetado pelo app que usa o pacote
 spaces_upload = None
@@ -722,6 +746,7 @@ def analise(granja: str, tipo: str = "agua") -> dict:
         topologia = _get_farm_topology(farm)
         if topologia:
             result["topologia_eta"] = topologia
+        _inject_eta_timeline(result, farm)
 
         return result
 
@@ -1724,6 +1749,7 @@ def consumo(granja: str, dias: int = 7, formato: str = "dados") -> dict:
         topologia = _get_farm_topology(farm)
         if topologia:
             result["topologia_eta"] = topologia
+        _inject_eta_timeline(result, farm)
 
         return result
 
@@ -1771,6 +1797,7 @@ def analise_consumo_detalhada(granja: str, dias: int = 10, data_inicio: str = No
         topologia = _get_farm_topology(farm)
         if topologia:
             result["topologia_eta"] = topologia
+        _inject_eta_timeline(result, farm)
 
         with Session() as session:
             # 1. Consumo diário de água (FLX)
@@ -3054,6 +3081,7 @@ def validar_flx_vs_ccd(granja: str, dias: int = 14, data_inicio: str = None) -> 
         topologia = _get_farm_topology(farm)
         if topologia:
             result["topologia_eta"] = topologia
+        _inject_eta_timeline(result, farm)
 
         with Session() as session:
             # 1. Consumo diário FLX
