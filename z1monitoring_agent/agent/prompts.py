@@ -194,6 +194,11 @@ Quando presente, USE a topologia para:
 17. PROCESSAMENTO PESADO: Ferramentas como ranking_offline, consultar_periodos_offline e ranking_granjas analisam muitos dados e demoram. ANTES de chamá-las, chame notificar_usuario com uma mensagem como "Isso envolve uma análise mais pesada, aguarde..." — essa mensagem será enviada imediatamente ao usuário. Só então chame a ferramenta pesada.
 14. GRÁFICOS: gerar_grafico_consumo envia imagens diretamente ao usuário. Apenas confirme que foram enviadas.
 15. DIMENSIONAMENTO ETA: Quando o usuário enviar uma análise de água (imagem ou texto) junto com o consumo diário, use a ferramenta dimensionar_eta. Extraia da imagem/texto os parâmetros: ferro, manganês, pH, turbidez, cor, DQO, sulfeto, dureza, alcalinidade, sólidos totais, coliformes e E. coli. Preencha apenas os que estiverem disponíveis. Pergunte o consumo diário se não foi informado. A ferramenta gera e envia um PDF automaticamente.
+18. PERÍODO SOLICITADO: quando o usuário pedir período específico ("últimas 36 horas", "3 dias", "1 semana"):
+    - Em `analise(...)` use o parâmetro `horas` com o valor pedido (max 168).
+    - Em `analise_consumo_detalhada(...)` use `dias` arredondando pra cima quando necessário (ex: 36h → 2 dias) — a tool trabalha em granularidade diária.
+    - Se houver arredondamento (pediu 36h mas usou 48h), DECLARE explicitamente no início da resposta: "Você pediu 36h. Como a análise detalhada trabalha em dias, usei 2 dias (48h)." Nunca simule precisão que não tem.
+19. NÃO REFAÇA tools já chamadas neste mesmo turno OU no turno imediatamente anterior quando o follow-up se refere aos mesmos dados. Se o usuário fez uma pergunta cirúrgica sobre algo que você já mostrou (ex: "naquela análise, X aconteceu quando Y caiu?"), USE os dados que você já tem em vez de re-chamar tools. Você pode rever o histórico de tool_use/tool_result deste mesmo chat. Se for genuinamente necessário re-fetch (dados podem ter mudado em horas), avise: "vou atualizar os dados".
 """
 
 # Prompt compacto para economizar tokens

@@ -698,21 +698,28 @@ def tempo_real(granja: str, sensor: str = "geral") -> dict:
 # =============================================================================
 
 
-def analise(granja: str, tipo: str = "agua") -> dict:
+def analise(granja: str, tipo: str = "agua", horas: int = 24) -> dict:
     """
     Faz análise de uma granja.
 
     Args:
         granja: Nome da granja
         tipo: agua (pH, ORP, temperatura) ou gas (nível, consumo, autonomia)
+        horas: janela da timeline de eventos (default 24, max 168 = 7 dias)
 
     Returns:
-        Análise do tipo solicitado
+        Análise do tipo solicitado. timeline_eta cobre as últimas `horas`.
     """
     try:
         farm = _resolve_farm_acl(granja)
         if not farm:
             return {"erro": f"Granja '{granja}' não encontrada"}
+
+        # Clamp de janela pra evitar abuso
+        if horas < 1:
+            horas = 1
+        if horas > 168:
+            horas = 168
 
         if tipo == "gas":
             from z1monitoring_agent.utils import commons_actions
@@ -764,7 +771,8 @@ def analise(granja: str, tipo: str = "agua") -> dict:
         topologia = _get_farm_topology(farm)
         if topologia:
             result["topologia_eta"] = topologia
-        _inject_eta_timeline(result, farm)
+        _inject_eta_timeline(result, farm, window_hours=horas)
+        result["periodo_horas"] = horas
 
         return result
 
@@ -1843,11 +1851,23 @@ def analise_consumo_detalhada(granja: str, dias: int = 10, data_inicio: str = No
             has_z1 = any(p.plate_type == "Z1" for p in plates)
 
             if has_ccd:
+                # Campos "Consumo X Acumulado" são monotonicamente crescentes
+                # (acumulado desde o início da operação). Consumo do dia é
+                # delta = MAX(dia) - MIN(dia). SUM() somava todas as leituras
+                # do dia, explodindo o valor em ~1000x.
                 daily_insumos = session.execute(text("""
                     SELECT
                         DATE(created_at) AS dia,
-                        ROUND(SUM(COALESCE((readings->>'Consumo Ácido Acumulado')::numeric, 0)), 1) AS acido_kg,
-                        ROUND(SUM(COALESCE((readings->>'Consumo Cloro Acumulado')::numeric, 0)), 1) AS cloro_kg
+                        ROUND(GREATEST(
+                            MAX((readings->>'Consumo Ácido Acumulado')::numeric)
+                            - MIN((readings->>'Consumo Ácido Acumulado')::numeric),
+                            0
+                        ), 1) AS acido_kg,
+                        ROUND(GREATEST(
+                            MAX((readings->>'Consumo Cloro Acumulado')::numeric)
+                            - MIN((readings->>'Consumo Cloro Acumulado')::numeric),
+                            0
+                        ), 1) AS cloro_kg
                     FROM events_ccd
                     WHERE farm ILIKE :farm
                       AND created_at >= NOW() - INTERVAL :dias
@@ -1863,8 +1883,16 @@ def analise_consumo_detalhada(granja: str, dias: int = 10, data_inicio: str = No
                 daily_insumos = session.execute(text("""
                     SELECT
                         DATE(created_at) AS dia,
-                        ROUND(SUM(COALESCE((readings->>'acid_consumed_acc')::numeric, 0)), 1) AS acido_kg,
-                        ROUND(SUM(COALESCE((readings->>'chlorine_consumed_acc')::numeric, 0)), 1) AS cloro_kg
+                        ROUND(GREATEST(
+                            MAX((readings->>'acid_consumed_acc')::numeric)
+                            - MIN((readings->>'acid_consumed_acc')::numeric),
+                            0
+                        ), 1) AS acido_kg,
+                        ROUND(GREATEST(
+                            MAX((readings->>'chlorine_consumed_acc')::numeric)
+                            - MIN((readings->>'chlorine_consumed_acc')::numeric),
+                            0
+                        ), 1) AS cloro_kg
                     FROM events_z1
                     WHERE farm ILIKE :farm
                       AND created_at >= NOW() - INTERVAL :dias
@@ -3348,12 +3376,13 @@ TOOLS_Z1 = [
     # ===== ANÁLISES =====
     Tool(
         name="analise",
-        description="Faz análise de uma granja. Tipo 'agua': pH, ORP, temperatura com alertas. Tipo 'gas': nível, consumo e autonomia.",
+        description="Faz análise de uma granja. Tipo 'agua': pH, ORP, temperatura com alertas + timeline de eventos. Tipo 'gas': nível, consumo e autonomia. Use 'horas' para ajustar a janela da timeline (default 24, max 168=7 dias).",
         parameters={
             "type": "object",
             "properties": {
                 "granja": {"type": "string", "description": "Nome da granja"},
                 "tipo": {"type": "string", "description": "agua ou gas (default: agua)", "default": "agua"},
+                "horas": {"type": "integer", "description": "Janela da timeline em horas (default 24, max 168). Use 36, 48, 72, etc conforme o pedido.", "default": 24},
             },
             "required": ["granja"],
         },
