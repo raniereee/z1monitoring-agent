@@ -6,6 +6,7 @@ ou se pode responder diretamente, e executa até resolver.
 """
 
 import json
+import time
 import anthropic
 import structlog
 from typing import List, Optional
@@ -40,6 +41,8 @@ class Agent:
         context: Optional[dict] = None,
         use_deep_model: bool = False,
         message_history: Optional[List[dict]] = None,
+        tool_cache: Optional[dict] = None,
+        tool_cache_ttl: int = 1800,
     ):
         """
         Args:
@@ -47,7 +50,14 @@ class Agent:
             system_prompt: Prompt de sistema que define o comportamento
             context: Contexto adicional (dados do usuário, granja, etc)
             use_deep_model: Se True usa Sonnet (análise profunda), senão Haiku (rápido)
-            message_history: Histórico de mensagens anteriores [{"role": "user"|"assistant", "content": "..."}]
+            message_history: Histórico de mensagens anteriores. Cada item é um
+                dict com {role, content}. content pode ser string (texto puro)
+                OU lista de blocos Anthropic (tool_use/tool_result/text).
+            tool_cache: dict pré-existente {key: {"result": ..., "ts": float}}
+                pra reutilizar resultados de tool entre turnos. Caller passa
+                e salva de volta. Se None, cria vazio (sem persistência).
+            tool_cache_ttl: segundos de validade dos entries do cache (default
+                1800 = 30 min).
         """
         self.tools = {tool.name: tool for tool in tools}
         self.system_prompt = system_prompt
@@ -57,6 +67,12 @@ class Agent:
         self.total_input_tokens = 0
         self.total_output_tokens = 0
         self.api_calls = 0
+        self.tool_cache = tool_cache if tool_cache is not None else {}
+        self.tool_cache_ttl = tool_cache_ttl
+        self.tool_cache_hits = 0
+        # Marca onde começa a contribuição deste turno (msgs adicionadas
+        # daqui em diante). Caller usa pra saber o que persistir.
+        self._messages_start_idx = len(self.messages)
 
     def _build_system_prompt(self) -> list:
         """
@@ -193,9 +209,18 @@ class Agent:
 
                         log.info("🤖 Agent chamando tool", tool=tool_name, input=tool_input)
 
-                        # Executa a tool
-                        if tool_name in self.tools:
+                        # Cache lookup: chave = nome + inputs canônicos.
+                        # Bypass pra tools com efeito colateral (executar
+                        # ajuste, registrar visita, enviar mensagem).
+                        cache_key = self._tool_cache_key(tool_name, tool_input)
+                        cached = self._tool_cache_get(cache_key)
+                        if cached is not None:
+                            log.info("🧠 Tool [%s] cache hit", tool_name)
+                            result = cached
+                            self.tool_cache_hits += 1
+                        elif tool_name in self.tools:
                             result = self.tools[tool_name].run(**tool_input)
+                            self._tool_cache_put(cache_key, result, tool_name)
                         else:
                             result = {"error": f"Tool '{tool_name}' não encontrada"}
 
@@ -247,3 +272,42 @@ class Agent:
     def clear_history(self):
         """Limpa o histórico de mensagens."""
         self.messages = []
+
+    # -----------------------------------------------------------------------
+    # Tool result cache
+    # -----------------------------------------------------------------------
+    # Tools que NÃO devem ser cacheadas (efeito colateral em execução).
+    _TOOL_CACHE_BYPASS = frozenset({
+        "confirmar_ajuste_parametro",
+        "enviar_botoes_confirmacao",
+        "notificar_usuario",
+        "registrar_visita",
+    })
+
+    @staticmethod
+    def _tool_cache_key(tool_name: str, tool_input: dict) -> str:
+        try:
+            args = json.dumps(tool_input or {}, sort_keys=True, ensure_ascii=False)
+        except Exception:
+            args = str(tool_input)
+        return f"{tool_name}::{args}"
+
+    def _tool_cache_get(self, key: str):
+        entry = self.tool_cache.get(key)
+        if not entry:
+            return None
+        ts = entry.get("ts", 0)
+        if (time.time() - ts) > self.tool_cache_ttl:
+            self.tool_cache.pop(key, None)
+            return None
+        return entry.get("result")
+
+    def _tool_cache_put(self, key: str, result, tool_name: str):
+        if tool_name in self._TOOL_CACHE_BYPASS:
+            return
+        self.tool_cache[key] = {"result": result, "ts": time.time()}
+
+    def get_new_messages(self) -> list:
+        """Mensagens adicionadas neste turno (incluindo tool_use/tool_result).
+        Útil pra caller persistir histórico estruturado."""
+        return self.messages[self._messages_start_idx:]
