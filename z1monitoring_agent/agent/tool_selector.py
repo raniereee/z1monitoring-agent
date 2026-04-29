@@ -19,6 +19,7 @@ CORE_TOOLS = [
     "mostrar_menu_principal",
     "mostrar_ajuda",
     "suporte",
+    "resetar_conversa",
 ]
 
 # Mapeamento categoria → tools específicas

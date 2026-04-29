@@ -121,6 +121,7 @@ class UserContext:
         self.msisdn = None  # Telefone do usuário (WhatsApp)
         self.channel = None  # Canal do WhatsApp
         self.send_immediate_fn = None  # Função para envio imediato (injetada pelo handler)
+        self.reset_requested = False  # Sinaliza ao handler que o histórico deve ser zerado após o turno
 
 
 # Contexto global (será setado pelo handler)
@@ -1495,6 +1496,27 @@ def mostrar_menu_principal() -> dict:
     return {
         "acao": "mostrar_menu",
         "mensagem": "Mostrando menu principal",
+    }
+
+
+def resetar_conversa() -> dict:
+    """
+    Recomeça a conversa do zero: descarta o histórico do chat e o cache de
+    ferramentas. Use quando o usuário pedir explicitamente pra recomeçar,
+    voltar ao início, esquecer tudo, limpar a conversa, começar de novo, etc.
+
+    Após chamar esta tool, responda APENAS com a mensagem retornada (curta,
+    acolhedora). NÃO chame nenhuma outra tool no mesmo turno.
+
+    Returns:
+        Mensagem pronta pro usuário.
+    """
+    ctx = get_user_context()
+    if ctx is not None:
+        ctx.reset_requested = True
+    return {
+        "acao": "reset_conversa",
+        "mensagem": "Beleza, então vamos do começo. Me diz o que você precisa.",
     }
 
 
@@ -3634,6 +3656,18 @@ TOOLS_Z1 = [
         description="Mostra o menu principal de opções. Use quando o usuário pedir ajuda ou não souber o que fazer.",
         parameters={"type": "object", "properties": {}, "required": []},
         function=mostrar_menu_principal,
+    ),
+    Tool(
+        name="resetar_conversa",
+        description=(
+            "Recomeça a conversa do zero: limpa o histórico do chat e o cache "
+            "de ferramentas. Use quando o usuário pedir explicitamente pra "
+            "recomeçar/voltar ao início/esquecer tudo/limpar a conversa/começar "
+            "de novo/reset. Depois de chamar, responda APENAS com a mensagem "
+            "da tool e NÃO chame nenhuma outra tool no mesmo turno."
+        ),
+        parameters={"type": "object", "properties": {}, "required": []},
+        function=resetar_conversa,
     ),
     Tool(
         name="mostrar_ajuda",
