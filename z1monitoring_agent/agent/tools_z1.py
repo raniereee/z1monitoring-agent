@@ -2109,14 +2109,18 @@ def ranking_granjas(dias: int = 7) -> dict:
     }
 
 
-def panorama_24h(granja: str = None) -> dict:
+def panorama_24h(granja: str = None, cliente_primario: str = None) -> dict:
     """
     Obtém panorama das últimas 24 horas: placas online/offline, alarmes,
     consumo de ácido/cloro e leituras atuais de pH/ORP por granja.
 
     Args:
-        granja: Nome da granja (opcional). Se omitido, cobre todas as granjas
-                que o usuário tem acesso (limitado a 15 para admins).
+        granja: Nome da granja (opcional).
+        cliente_primario: Nome do cliente primário/empresa (opcional). Se
+                informado, cobre todas as granjas vinculadas a esse cliente
+                via secondaries.
+        Se ambos omitidos, cobre todas as granjas que o usuário tem acesso.
+        Em qualquer caso o resultado é limitado a 15 granjas (com observação).
 
     Returns:
         Dados reais extraídos do banco. NÃO inferir nem inventar valores fora
@@ -2124,25 +2128,70 @@ def panorama_24h(granja: str = None) -> dict:
     """
     try:
         from z1monitoring_models.models.choose_event_model import get_events_model
+        from z1monitoring_models.models.clients_secondary import ClientSecondary
+        from z1monitoring_models.models.clients_primary import ClientPrimary
 
         ctx = get_user_context()
         now = datetime.now()
         inicio = now - timedelta(hours=24)
-        truncated_admin = False
+        truncated = False
+        truncated_motivo = None
+        cliente_resolvido = None
+        ambiguidade = None
 
         if granja:
             farm = _resolve_farm_acl(granja)
             if not farm:
                 return {"erro": f"Granja '{granja}' não encontrada"}
             target_farm_names = [farm.name]
+        elif cliente_primario:
+            matches = ClientPrimary.get_all_associated_by_name(cliente_primario)
+            if not matches:
+                return {"erro": f"Cliente primário '{cliente_primario}' não encontrado"}
+            pc = matches[0]
+            cliente_resolvido = pc.fantasy_name
+            if len(matches) > 1:
+                ambiguidade = [m.fantasy_name for m in matches[1:6]]
+            secondaries = ClientSecondary.get_all({"associateds_allowed": pc.cnpj}) or []
+            cliente_farms = []
+            for sc in secondaries:
+                cliente_farms.extend(
+                    Farm.get_all_farms_objs_filtereds({"owner": sc.identification}) or []
+                )
+            allowed = _get_allowed_farm_names(ctx)
+            if allowed is not None:
+                allowed_set = set(allowed)
+                cliente_farms = [f for f in cliente_farms if f.name in allowed_set]
+            if not cliente_farms:
+                return {
+                    "erro": f"Nenhuma granja acessível para o cliente '{pc.fantasy_name}'",
+                    "cliente_primario": pc.fantasy_name,
+                }
+            if len(cliente_farms) > 15:
+                truncated = True
+                truncated_motivo = (
+                    f"Cliente '{pc.fantasy_name}' tem {len(cliente_farms)} "
+                    f"granjas: resultado limitado às 15 primeiras."
+                )
+                cliente_farms = cliente_farms[:15]
+            target_farm_names = [f.name for f in cliente_farms]
         else:
             allowed = _get_allowed_farm_names(ctx)
             if allowed is None:
                 farms_all = Farm.get_all_farms_objs_filtereds({})
                 target_farm_names = [f.name for f in farms_all[:15]]
-                truncated_admin = len(farms_all) > 15
+                if len(farms_all) > 15:
+                    truncated = True
+                    truncated_motivo = (
+                        "Admin com >15 granjas: resultado limitado às 15 primeiras."
+                    )
             else:
-                target_farm_names = allowed
+                target_farm_names = allowed[:15]
+                if len(allowed) > 15:
+                    truncated = True
+                    truncated_motivo = (
+                        f"Usuário tem {len(allowed)} granjas: resultado limitado às 15 primeiras."
+                    )
 
         if not target_farm_names:
             return {"erro": "Nenhuma granja acessível no escopo do usuário"}
@@ -2247,8 +2296,12 @@ def panorama_24h(granja: str = None) -> dict:
         }
         if granja:
             result["granja_filtrada"] = target_farm_names[0]
-        if truncated_admin:
-            result["observacao"] = "Admin com >15 granjas: resultado limitado às 15 primeiras."
+        if cliente_resolvido:
+            result["cliente_primario"] = cliente_resolvido
+        if ambiguidade:
+            result["outros_clientes_compativeis"] = ambiguidade
+        if truncated and truncated_motivo:
+            result["observacao"] = truncated_motivo
         return result
 
     except Exception as e:
@@ -2828,9 +2881,13 @@ def saude_empresa(empresa: str, problema: str = "todos", dias_minimo: int = 0) -
         now = datetime.now()
 
         # Buscar granjas da empresa
-        pc = ClientPrimary.get_primary_like_name(empresa)
-        if not pc:
+        matches = ClientPrimary.get_all_associated_by_name(empresa)
+        if not matches:
             return {"erro": f"Empresa '{empresa}' nao encontrada"}
+        pc = matches[0]
+        ambiguidade = (
+            [m.fantasy_name for m in matches[1:6]] if len(matches) > 1 else None
+        )
 
         secondaries = ClientSecondary.get_all({"associateds_allowed": pc.cnpj})
         farms = []
@@ -2918,17 +2975,23 @@ def saude_empresa(empresa: str, problema: str = "todos", dias_minimo: int = 0) -
             msg = "Nenhum problema encontrado"
             if dias_minimo:
                 msg += f" com mais de {dias_minimo} dias"
-            return {"empresa": pc.fantasy_name, "mensagem": msg}
+            out = {"empresa": pc.fantasy_name, "mensagem": msg}
+            if ambiguidade:
+                out["outras_empresas_compativeis"] = ambiguidade
+            return out
 
         resultados.sort(key=lambda x: max((p.get("dias", 0) for p in x["problemas"]), default=0), reverse=True)
 
-        return {
+        out = {
             "empresa": pc.fantasy_name,
             "total_com_problema": len(resultados),
             "filtro": problema,
             "dias_minimo": dias_minimo,
             "resultados": resultados[:30],
         }
+        if ambiguidade:
+            out["outras_empresas_compativeis"] = ambiguidade
+        return out
 
     except Exception as e:
         log.error("Erro em saude_empresa", error=str(e))

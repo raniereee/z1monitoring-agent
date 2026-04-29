@@ -60,6 +60,8 @@ TOOL_SETS = {
         "validar_flx_vs_ccd",
         "relatorio_gas",
         "ranking_granjas",
+        "panorama_24h",
+        "saude_empresa",
     ],
     "granjas_clientes": [
         "listar_granjas_usuario",
@@ -67,6 +69,8 @@ TOOL_SETS = {
         "buscar_cliente_primario",
         "listar_granjas_cliente_primario",
         "consultar_falta_gas_cliente_primario",
+        "panorama_24h",
+        "saude_empresa",
     ],
     "outros": [
         "registrar_visita",
@@ -87,8 +91,8 @@ CATEGORIAS:
 - tempo_real: ver dados em tempo real, status de uma granja, análise de água, panorama 24h
 - ajuste_parametros: alterar pH, ORP, dosadora, ABS, limite 24h, ozônio, modo cíclico/automático
 - controle_equipamento: ligar/desligar bomba, válvula, alarme de galpão, controle de lote
-- relatorios: gráfico de consumo, relatório de gás, ranking de granjas
-- granjas_clientes: listar granjas, buscar cliente, informações de clientes primários
+- relatorios: gráfico de consumo, relatório de gás, ranking de granjas, apanhado/panorama/análise geral de várias granjas
+- granjas_clientes: listar granjas, buscar cliente, informações de clientes primários, panorama de TODAS as granjas de um cliente primário (ex: "BIOTER", "Copacol", "Avioeste")
 - outros: registrar visita, dimensionar ETA, suporte, ajuda, menu
 
 Responda APENAS com os nomes das categorias separados por vírgula, sem explicação.

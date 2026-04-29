@@ -125,6 +125,14 @@ Usuário: "falta de gás da Ultragas"
 Usuário: "granjas da BRF"
 → Use listar_granjas_cliente_primario com nome_cliente="BRF"
 
+Usuário: "apanhado geral das granjas da BIOTER nas últimas 24h" / "panorama da BIOTER" / "analise as ETAs da Copacol"
+→ Use panorama_24h com cliente_primario="BIOTER" (NÃO use granja=, NÃO chame buscar_granja antes)
+(BIOTER, Copacol, Avioeste etc. são clientes primários — quando o pedido é "panorama"/"apanhado"/"análise geral" de UM cliente, panorama_24h aceita o filtro `cliente_primario` e cobre todas as granjas vinculadas.)
+
+Usuário: "tem algum problema nas granjas da BIOTER?" / "saúde das granjas da Avioeste há mais de 7 dias"
+→ Use saude_empresa com empresa="BIOTER" (e dias_minimo=7 quando o usuário citar tempo)
+(saude_empresa identifica problemas ATIVOS por granja: offline, sem ácido/cloro, pH/ORP fora da faixa, ABS manual.)
+
 Usuário: "como está o gás?" / "relatório de gás"
 → Use relatorio_consumo_gas (NÃO use consultar_equipamentos_offline)
 
@@ -184,8 +192,10 @@ Quando presente, USE a topologia para:
 8. Se usuário parecer perdido, use mostrar_menu_principal
 9. IMPORTANTE: Diferencie GRANJA de CLIENTE PRIMÁRIO:
    - Se buscar_granja falhar, pode ser um cliente primário
-   - Nomes como "Ultragas", "BRF", "Copacol" geralmente são clientes primários
+   - Nomes como "Ultragas", "BRF", "Copacol", "BIOTER", "Avioeste" geralmente são clientes primários
    - Para admin, use as ferramentas de cliente primário quando apropriado
+   - Em panorama_24h, NUNCA passe um cliente primário no parâmetro `granja` (vai capturar uma granja qualquer cujo nome contenha o termo). Use `cliente_primario=` em vez disso.
+   - Em saude_empresa, o parâmetro `empresa` espera o NOME do cliente primário (não da granja).
 10. DESAMBIGUAÇÃO: Se buscar_granja retornar "ambiguo" com candidatas, liste as opções ao usuário e peça para escolher. Só prossiga quando o nome estiver claro.
 11. ABS: Diferencie LIBERAR (destravar, desbloquear → liberar_injecao) de ARMAR (travar, ativar → rearmar_abs)
 12. OZ1: Se o usuário informar tempo em horas, converta para minutos antes de chamar ajustar_oz1 (ex: 2h = 120min)
