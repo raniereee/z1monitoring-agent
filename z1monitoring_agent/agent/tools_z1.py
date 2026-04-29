@@ -2913,7 +2913,11 @@ def saude_empresa(empresa: str, problema: str = "todos", dias_minimo: int = 0) -
                     state = PlateState.load(plate.serial)
                     if state and not state.have_communication:
                         last = LastEvent.get_last_register(plate.owner, plate.serial)
-                        ultimo = last.updated_at if last else None
+                        ultimo = (
+                            last.get("created_at") if isinstance(last, dict)
+                            else getattr(last, "created_at", None) if last
+                            else None
+                        )
                         dias_off = (now - ultimo).days if ultimo else 999
                         if dias_off >= dias_minimo:
                             problemas_placa.append({
