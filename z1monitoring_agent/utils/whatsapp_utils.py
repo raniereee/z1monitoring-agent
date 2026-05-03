@@ -687,15 +687,14 @@ def mount_realtime_ccd(plate, last_ev):
         msg += """*Por favor, verifique sua internet ou reinicie seu equipamento*\n\n"""
         # return msg
 
-    modos = {0: "Desabilitada", 1: "Automático", 2: "Cíclico"}
     power_status = {0: "Desligada", 1: "Ligada"}
 
     msg += "*⚙️ MODO OPERAÇÃO*\n\n"
     msg += """💧 Dosadora Ácido\n"""
-    msg += f"""   └ {modos.get(last_ev.get("Modo Dosadora Ácido"))} • {power_status.get(last_ev.get("Comando Dosadora Ácido"))}\n\n"""
+    msg += f"""   └ {last_ev.get("Modo Dosadora Ácido")} • {power_status.get(last_ev.get("Comando Dosadora Ácido"))}\n\n"""
 
     msg += """🧴 Dosadora Cloro\n"""
-    msg += f"""   └ {modos.get(last_ev.get("Modo Dosadora Cloro"))} • {power_status.get(last_ev.get("Comando Dosadora Cloro"))}\n\n"""
+    msg += f"""   └ {last_ev.get("Modo Dosadora Cloro")} • {power_status.get(last_ev.get("Comando Dosadora Cloro"))}\n\n"""
     msg += "━━━━━━━━━━━━━\n\n"
 
     associateds_plates_ = plate.get("params", {}).get("associateds_plates", [])
@@ -1048,7 +1047,7 @@ def mount_tempo_real_elevatoria(plate, last_ev):
             falha = value
 
         if falha:
-            falha_list += " - *{key}*\n"
+            falha_list += f" - *{key}*\n"
 
     msg += "**⚙️ OPERAÇÃO*\n\n"
 
