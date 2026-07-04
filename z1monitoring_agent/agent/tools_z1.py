@@ -34,6 +34,7 @@ from z1monitoring_models.models.integradora import Integradora
 from z1monitoring_models.models.ppm_readings import PpmReading
 from z1monitoring_models.models.events_ccd import EventCCD
 
+from z1monitoring_agent.agent import farm_resolver
 from z1monitoring_agent.utils.eta_dimensioning import calculate_eta, generate_pdf
 from z1monitoring_agent.utils.lote_report import gerar_pdf_lote, TIPOS_MORTE, TIPOS_RACAO
 from z1monitoring_agent.agent.eta_timeline import condense_eta_timeline
@@ -232,21 +233,6 @@ def _require_write(fn):
     return wrapper
 
 
-_FARM_PREFIXES = ("granja ", "fazenda ", "sitio ", "sítio ", "chacara ", "chácara ", "aviario ", "aviário ")
-
-
-def _norm_no_prefix(s):
-    """Normaliza (lower, sem acento) e tira prefixos tipo 'Granja '."""
-    import unicodedata
-
-    nfkd = unicodedata.normalize("NFKD", s or "")
-    t = "".join(c for c in nfkd if not unicodedata.combining(c)).lower().strip()
-    for p in _FARM_PREFIXES:
-        if t.startswith(p):
-            t = t[len(p):].strip()
-    return t
-
-
 def _farm_names_in_scope(ctx):
     """Nomes de granja visíveis pro usuário (admin = todas)."""
     if not ctx or ctx.is_admin:
@@ -256,35 +242,21 @@ def _farm_names_in_scope(ctx):
 
 
 def _farm_similares(nome, top_n=15):
-    """Top-N granjas do escopo por similaridade léxica (sem prefixo)."""
-    from difflib import SequenceMatcher
-
-    alvo = _norm_no_prefix(nome)
-    if not alvo:
-        return []
-    names = _farm_names_in_scope(get_user_context())
-    scored = sorted(
-        ((SequenceMatcher(None, alvo, _norm_no_prefix(n)).ratio(), n) for n in names),
-        reverse=True,
-    )
-    return scored[:top_n]
+    """Top-N granjas do ESCOPO por similaridade léxica (farm_resolver)."""
+    return farm_resolver.top_similares(nome, _farm_names_in_scope(get_user_context()), top_n=top_n)
 
 
 def _fuzzy_farm_in_scope(nome):
     """Fallback fuzzy DENTRO do escopo do usuário quando a busca do banco
-    falha (ex: 'bak' → 'Granja Back' — o SIMILARITY do banco compara com o
-    nome COM prefixo e fica abaixo do threshold). Auto-resolve só com match
-    forte e sem vice próximo; o resto fica pro fluxo de desambiguação."""
-    scored = _farm_similares(nome, top_n=2)
-    if not scored:
+    falha (ex: 'bak' → 'Granja Back'). Auto-resolve só em match inequívoco
+    (thresholds no farm_resolver); sempre passa pelo enforce."""
+    best = farm_resolver.best_match(nome, _farm_names_in_scope(get_user_context()))
+    if not best:
         return None
-    best_score, best_name = scored[0]
-    second_score = scored[1][0] if len(scored) > 1 else 0.0
-    if best_score >= 0.75 and (best_score - second_score) >= 0.1:
-        farm = Farm.load(best_name)
-        if farm:
-            log.info("farm fuzzy resolvida", pedido=nome, granja=best_name, score=round(best_score, 2))
-            return _enforce_farm_access(farm)
+    farm = Farm.load(best)
+    if farm:
+        log.info("farm fuzzy resolvida", pedido=nome, granja=best)
+        return _enforce_farm_access(farm)
     return None
 
 
