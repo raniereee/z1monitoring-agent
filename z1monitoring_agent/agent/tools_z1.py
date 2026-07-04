@@ -2457,10 +2457,16 @@ _GENERO_MAP = {"macho": "masculino", "femea": "feminino", "misto": "misto"}
 
 
 def _lote_farm_denied(ctx):
-    """Lote é função de produtor: exige permissão FARM (ou ADMIN)."""
-    if ctx and (ctx.is_admin or ctx.permission_name == "FARM"):
+    """Funções de produtor exigem permissão FARM — NINGUÉM mais, nem ADMIN
+    nem cliente primário (paridade com o backend_whatsapp: quem lança
+    mortalidade/ração, abre/fecha lote, registra PPM e muda fonte é quem
+    opera a granja)."""
+    if ctx and ctx.permission_name == "FARM":
         return None
-    return {"erro": "Essa função é exclusiva das contas de produtor (granja)."}
+    return {
+        "erro": "Essa função é exclusiva das contas de produtor (granja). "
+        "Admin e cliente primário não podem executá-la."
+    }
 
 
 def _lote_resolver_farm(granja):
