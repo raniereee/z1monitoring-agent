@@ -3367,6 +3367,145 @@ def consultar_alteracoes_ccd(
 
 
 # =============================================================================
+# 10d. INSTITUCIONAL — conteúdo estático + avisos da concessionária.
+# Portado do backend_whatsapp (manual_gas, link_plataforma, explicacao_ccd,
+# fornecimento_agua_concessionaria, interesse_aquisicao) numa tool única.
+# =============================================================================
+
+_MANUAL_GAS_URL = "https://img.monitora.pro/space/Manual_Monitoramento_Gas_Z1.pdf"
+_PLATAFORMA_URL = "https://z1monitoramento.com"
+_GUIDES_IMAGE_PATH = "/home/ubuntu/guides/"
+_VENDAS_PHONE = "554888331991"
+_VENDAS_WA_LINK = (
+    "https://wa.me/554888331991?text=Ol%C3%A1%2C%20gostaria%20de%20saber%20mais%20sobre%20os%20produtos%20Z1"
+)
+_CASAN_URL = "https://e.casan.com.br/avisos/"
+
+
+def _casan_avisos_texto():
+    """Baixa a página de avisos da CASAN e extrai só o texto relevante
+    (stdlib: sem bs4 no agente). Quem interpreta/resume é o próprio agente."""
+    import re as _re
+    from urllib.request import Request, urlopen
+
+    req = Request(_CASAN_URL, headers={"User-Agent": "Mozilla/5.0"})
+    html = urlopen(req, timeout=10).read().decode("utf-8", "replace")
+    html = _re.sub(r"<(script|style|noscript)[^>]*>.*?</\1>", " ", html, flags=_re.S | _re.I)
+    texto = _re.sub(r"<[^>]+>", "\n", html)
+    linhas = [ln.strip() for ln in texto.split("\n") if ln.strip()]
+    keywords = (
+        "aviso", "interrup", "manuten", "fornecimento", "água", "agua",
+        "suspens", "normaliza", "abasteci", "rodízio", "rodizio", "reparo",
+    )
+    relevantes, buf = [], []
+    for ln in linhas:
+        low = ln.lower()
+        if any(k in low for k in keywords) or (buf and len(relevantes) < 200):
+            buf.append(ln)
+            relevantes.append(ln)
+    corpo = "\n".join(relevantes) or "\n".join(linhas[:120])
+    return corpo[:4000]
+
+
+def info_z1(topico: str, cidade: str = None, bairro: str = None) -> dict:
+    """Conteúdo institucional da Z1: manual de gás, link da plataforma,
+    explicação da CCD (com imagens), avisos da concessionária e contato de vendas."""
+    ctx = get_user_context()
+    try:
+        t = (topico or "").strip().lower()
+
+        if t == "manual_gas":
+            if ctx:
+                ctx.pending_messages.append({
+                    "type": "document",
+                    "msg": "Manual de Monitoramento de Gás - Z1 Tecnologia",
+                    "url": _MANUAL_GAS_URL,
+                })
+            return {
+                "acao": "manual_enviado",
+                "mensagem": "PDF do Manual de Monitoramento de Gás enviado como documento. "
+                f"Mencione também a plataforma: {_PLATAFORMA_URL}",
+            }
+
+        if t == "link_plataforma":
+            return {
+                "acao": "link_plataforma",
+                "url": _PLATAFORMA_URL,
+                "mensagem": "Passe o link da plataforma web, onde ficam dados, gráficos e relatórios completos.",
+            }
+
+        if t == "explicacao_ccd":
+            enviadas = []
+            if ctx:
+                for arquivo, caption in (
+                    ("ccd_config.png", "⚙️ Configuração de parâmetros"),
+                    ("ccd_vincular.png", "🔗 Vinculação de sensores"),
+                ):
+                    path = os.path.join(_GUIDES_IMAGE_PATH, arquivo)
+                    if os.path.exists(path):
+                        ctx.pending_messages.append({"type": "image_upload", "msg": caption, "file_path": path})
+                        enviadas.append(arquivo)
+            return {
+                "acao": "explicacao_ccd",
+                "imagens_enviadas": enviadas,
+                "resumo": (
+                    "A CCD (Central de Dosagem) controla automaticamente a dosagem de "
+                    "ácido e cloro pra manter o pH e o ORP da água dentro das faixas "
+                    "configuradas. Ela lê os sensores, aciona as dosadoras e tem "
+                    "proteções como o ABS (limite de consumo em 24h)."
+                ),
+                "mensagem": "Explique a CCD com o resumo acima; as imagens de guia "
+                + ("foram enviadas junto." if enviadas else "não estão disponíveis neste servidor."),
+            }
+
+        if t == "avisos_agua_concessionaria":
+            try:
+                corpo = _casan_avisos_texto()
+            except Exception as e:
+                log.warning("falha ao buscar avisos da CASAN", error=str(e))
+                return {"erro": "Não consegui consultar os avisos da CASAN agora. Tente mais tarde."}
+            return {
+                "acao": "avisos_casan",
+                "fonte": _CASAN_URL,
+                "cidade_padrao": "Chapecó, bairro Maria Goretti",
+                "avisos_texto_cru": corpo,
+                "mensagem": (
+                    "Resuma pro usuário APENAS o que afeta a cidade/bairro dele "
+                    f"({cidade or 'Chapecó'}{', ' + bairro if bairro else ''}) — fornecimento normal "
+                    "ou com restrição. Se nada citar a região, diga que não há aviso pra ela."
+                ),
+            }
+
+        if t == "contato_vendas":
+            if ctx:
+                ctx.pending_messages.append({
+                    "type": "contacts",
+                    "contacts": [
+                        {
+                            "name": {"formatted_name": "Vendas Z1", "first_name": "Vendas Z1"},
+                            "phones": [{"phone": _VENDAS_PHONE, "wa_id": _VENDAS_PHONE, "type": "CELL"}],
+                            "org": {"company": "Z1 Monitoramento"},
+                        }
+                    ],
+                })
+            return {
+                "acao": "contato_vendas_enviado",
+                "link_whatsapp": _VENDAS_WA_LINK,
+                "mensagem": "Cartão de contato de Vendas Z1 enviado. Cumprimente o usuário "
+                "pelo primeiro nome e inclua o link do WhatsApp de vendas.",
+            }
+
+        return {
+            "erro": f"Tópico '{topico}' desconhecido.",
+            "topicos": ["manual_gas", "link_plataforma", "explicacao_ccd",
+                        "avisos_agua_concessionaria", "contato_vendas"],
+        }
+    except Exception as e:
+        log.exception("Erro em info_z1", error=str(e))
+        return {"erro": str(e)}
+
+
+# =============================================================================
 # 11. REGISTRO DE VISITA
 # =============================================================================
 
@@ -4934,6 +5073,31 @@ TOOLS_Z1 = [
             "required": ["granja"],
         },
         function=consultar_alteracoes_ccd,
+    ),
+    # ===== INSTITUCIONAL =====
+    Tool(
+        name="info_z1",
+        description=(
+            "Conteúdo institucional da Z1. Tópicos: manual_gas (envia o PDF do manual de "
+            "monitoramento de gás), link_plataforma (URL da plataforma web), explicacao_ccd (o que é "
+            "a central de dosagem, com imagens de guia), avisos_agua_concessionaria (avisos de "
+            "fornecimento da CASAN — retorna texto cru pra VOCÊ resumir pro usuário), contato_vendas "
+            "(quando alguém quer comprar/orçamento/preço de equipamento — envia o cartão de Vendas Z1)."
+        ),
+        parameters={
+            "type": "object",
+            "properties": {
+                "topico": {
+                    "type": "string",
+                    "enum": ["manual_gas", "link_plataforma", "explicacao_ccd",
+                             "avisos_agua_concessionaria", "contato_vendas"],
+                },
+                "cidade": {"type": "string", "description": "Cidade do usuário (avisos de água; default Chapecó)"},
+                "bairro": {"type": "string", "description": "Bairro do usuário (avisos de água)"},
+            },
+            "required": ["topico"],
+        },
+        function=info_z1,
     ),
     # ===== REGISTRO DE VISITA =====
     Tool(

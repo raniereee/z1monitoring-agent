@@ -125,6 +125,9 @@ Usuário: "agenda o pH pra 6,5 a 7 amanhã às 8h na granja x"
 Usuário: "quem mexeu nos parâmetros da granja x?" / "últimas alterações da CCD"
 → Use consultar_alteracoes_ccd(granja="granja x")
 
+Usuário: "manual do gás" / "como funciona a CCD" / "link da plataforma" / "quero comprar mais um sensor" / "vai faltar água?"
+→ Use info_z1 com o tópico correspondente (manual_gas, explicacao_ccd, link_plataforma, contato_vendas, avisos_agua_concessionaria)
+
 Usuário: "oi" / "bom dia"
 → Responda diretamente com saudação e pergunte como ajudar
 

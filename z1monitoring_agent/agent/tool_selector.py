@@ -92,6 +92,7 @@ TOOL_SETS = {
         "registrar_visita",
         "dimensionar_eta",
         "notificar_usuario",
+        "info_z1",
     ],
 }
 
@@ -111,7 +112,7 @@ CATEGORIAS:
 - ppm: usuário INFORMA valor de cloro que mediu ("medi 1,02", "deu 2 de cloro") ou manda foto do medidor; trocar fonte de água da granja (poço/rio/cisterna/açude)
 - relatorios: gráfico de consumo, relatório de gás, ranking de granjas, apanhado/panorama/análise geral de várias granjas
 - granjas_clientes: listar granjas, buscar cliente, informações de clientes primários, panorama de TODAS as granjas de um cliente primário (ex: "BIOTER", "Copacol", "Avioeste")
-- outros: registrar visita, dimensionar ETA, suporte, ajuda, menu
+- outros: registrar visita, dimensionar ETA, suporte, ajuda, menu, manual de gás, link da plataforma, como funciona a CCD, avisos da concessionária de água, comprar/orçamento/preço de equipamento
 
 Responda APENAS com os nomes das categorias separados por vírgula, sem explicação.
 Exemplos: "relatorios" ou "relatorios,consulta_status" ou "tempo_real,ajuste_parametros"."""
