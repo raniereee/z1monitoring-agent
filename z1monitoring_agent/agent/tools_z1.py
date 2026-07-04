@@ -1728,6 +1728,7 @@ def consumo(granja: str, dias: int = 7, formato: str = "dados") -> dict:
 
         has_ccd = any(p.plate_type == "CCD" for p in plates)
         has_z1 = any(p.plate_type == "Z1" for p in plates)
+        has_wgt = any(p.plate_type == "WGT" for p in plates)
 
         if has_ccd:
             _Event = get_events_model("CCD")
@@ -1748,6 +1749,21 @@ def consumo(granja: str, dias: int = 7, formato: str = "dados") -> dict:
                     "acido_kg": float(ev.acid_consumed_acc if ev.acid_consumed_acc is not None else 0),
                     "cloro_kg": float(ev.chlorine_consumed_acc if ev.chlorine_consumed_acc is not None else 0),
                 }
+        elif has_wgt:
+            # WGT standalone (sem CCD/Z1): a balança é a própria fonte de
+            # ácido/cloro. Eventos vêm como tuplas (created_at, field_name,
+            # value) com field_name normalizado (acido/cloro/gas).
+            _Event = get_events_model("WGT")
+            events = _Event.get_insumes_consumed_last_days(farm.name, date_lower, date_upper)
+            field_to_key = {"acido": "acido_kg", "cloro": "cloro_kg"}
+            for created_at, field_name, value in events:
+                insume_key = field_to_key.get(field_name)
+                if not insume_key:
+                    continue
+                day_key = created_at.strftime("%Y-%m-%d")
+                if day_key not in consumption_data:
+                    consumption_data[day_key] = {}
+                consumption_data[day_key][insume_key] = float(value or 0)
 
         # Adiciona água de FLX se não veio do CCD
         flx_serials_associated_with_ccd = set()
@@ -1767,18 +1783,25 @@ def consumo(granja: str, dias: int = 7, formato: str = "dados") -> dict:
         for p in plates:
             if p.plate_type != "FLX":
                 continue
-            if p.serial in flx_serials_associated_with_ccd:
-                continue
             _Event = get_events_model("FLX")
             events = _Event.get_water_consumed_last_days(farm.name, p.serial, date_lower, date_upper)
             for ev in events:
                 day_key = ev.created_at.strftime("%Y-%m-%d")
-                if day_key in days_with_ccd_water:
-                    continue
                 if day_key not in consumption_data:
                     consumption_data[day_key] = {}
+                try:
+                    flx_value = float(ev.water_consumed or 0)
+                except (TypeError, ValueError):
+                    flx_value = 0.0
                 current = consumption_data[day_key].get("agua_litros", 0)
-                consumption_data[day_key]["agua_litros"] = current + float(ev.water_consumed or 0)
+                # FLX e CCD associados medem a MESMA água por rotas diferentes
+                # (uplink FLX vs ESP-NOW → CCD); o firmware não retransmite
+                # amostra perdida, então o MAIOR recupera o que cada rota
+                # capturou. FLX não associada = ponto distinto → soma.
+                if p.serial in flx_serials_associated_with_ccd and day_key in days_with_ccd_water:
+                    consumption_data[day_key]["agua_litros"] = max(current, flx_value)
+                else:
+                    consumption_data[day_key]["agua_litros"] = current + flx_value
 
         if not consumption_data:
             return {"erro": f"Sem dados de consumo para '{farm.name}' nos últimos {dias} dias"}

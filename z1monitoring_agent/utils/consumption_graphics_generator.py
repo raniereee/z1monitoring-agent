@@ -5,12 +5,90 @@ Evita duplicação de código entre handlers de WhatsApp.
 
 import re
 import unicodedata
+from datetime import datetime
+
 import structlog
+
 from z1monitoring_agent.utils import graphics
 from z1monitoring_models.models.choose_event_model import get_events_model
+from z1monitoring_models.models.events_flx import EventFLX
 from z1monitoring_models.models.plates import Plate
 
 log = structlog.get_logger()
+
+
+def _compute_water_data_quality(plates, date_lower, date_upper, consumption_data):
+    """Estima litros possivelmente perdidos por amostras que não chegaram.
+
+    Firmware mede water_flow no ciclo e descarta se a transmissão falha
+    (não retransmite). Cobertura abaixo da esperada (1 amostra/min) =
+    consumo real maior que o registrado. Retorna None se cobertura ≥ 95%
+    ou dados insuficientes pra estimar.
+    """
+    flx_plates = [p for p in plates if p.plate_type == "FLX"]
+    if not flx_plates:
+        return None
+
+    try:
+        dl = datetime.strptime(date_lower, "%Y-%m-%d %H:%M:%S")
+        du = datetime.strptime(date_upper, "%Y-%m-%d %H:%M:%S")
+    except (TypeError, ValueError):
+        return None
+
+    period_minutes = max(int((du - dl).total_seconds() / 60), 1)
+    expected = period_minutes * len(flx_plates)
+
+    received = sum(EventFLX.count_samples_in_period(p.serial, date_lower, date_upper) for p in flx_plates)
+
+    if received <= 0 or expected <= 0:
+        return None
+
+    coverage = received / expected
+    if coverage >= 0.95:
+        return None
+
+    consumo_medido = sum(float(d.get("water_consumed", 0) or 0) for d in consumption_data.values())
+    if consumo_medido <= 0:
+        return None
+
+    consumo_estimado = consumo_medido * expected / received
+    perdido = consumo_estimado - consumo_medido
+
+    return {
+        "coverage": coverage,
+        "missing_samples": expected - received,
+        "consumo_perdido_estimado": perdido,
+    }
+
+
+def _format_br_number(value):
+    return f"{int(round(value)):,}".replace(",", ".")
+
+
+def _has_gas_signal(wgt_data, gas_level_data):
+    """True se a granja tem gás de fato no período: algum consumo de gás > 0
+    ou algum nível de tanque > 0.
+
+    O gráfico WGT (`graphics.consume_wgt`) é dedicado a gás ("Consumo de Gás e
+    Nível do Tanque"). Ácido/cloro medidos pela WGT vão pro gráfico principal
+    (ramo has_wgt em generate_consumption_graphics), então uma WGT sem gás não
+    deve gerar um segundo gráfico zerado.
+    """
+    for fields in (wgt_data or {}).values():
+        for k, v in fields.items():
+            if "gas" in k.lower():
+                try:
+                    if float(v or 0) > 0:
+                        return True
+                except (TypeError, ValueError):
+                    continue
+    for v in (gas_level_data or {}).values():
+        try:
+            if float(v or 0) > 0:
+                return True
+        except (TypeError, ValueError):
+            continue
+    return False
 
 
 def generate_consumption_graphics(farm, date_lower, date_upper):
@@ -30,7 +108,7 @@ def generate_consumption_graphics(farm, date_lower, date_upper):
         ]
     """
     response_list = []
-    plates = Plate.get_all({"farm_associated": farm.name})
+    plates = Plate.get_all({"farm_id": farm.id})
 
     # ========================================
     # 1. Gráfico de consumo Z1/CCD + FLX
@@ -41,8 +119,9 @@ def generate_consumption_graphics(farm, date_lower, date_upper):
     # Verifica se tem CCD ou Z1
     has_ccd = any(p.plate_type == "CCD" for p in plates)
     has_z1 = any(p.plate_type == "Z1" for p in plates)
+    has_wgt = any(p.plate_type == "WGT" for p in plates)
 
-    log.info(f"DEBUG consumption_graphics - has_ccd: {has_ccd}, has_z1: {has_z1}")
+    log.info(f"DEBUG consumption_graphics - has_ccd: {has_ccd}, has_z1: {has_z1}, has_wgt: {has_wgt}")
     log.info(f"DEBUG consumption_graphics - date_lower: {date_lower}, date_upper: {date_upper}")
 
     if has_ccd:
@@ -86,6 +165,25 @@ def generate_consumption_graphics(farm, date_lower, date_upper):
                 }
             )
 
+    elif has_wgt:
+        # WGT standalone (sem CCD/Z1): é a própria fonte de ácido/cloro. A WGT
+        # mede insumo por peso; quando há CCD, o CCD já espelha esses readings
+        # (ramo has_ccd acima). get_insumes_consumed_last_days retorna tuplas
+        # (created_at, field_name, value) com field_name normalizado
+        # (acido/cloro/gas). Ácido/cloro entram no gráfico principal; o gás
+        # segue no gráfico WGT dedicado (bloco 2).
+        _Event = get_events_model("WGT")
+        events = _Event.get_insumes_consumed_last_days(farm.name, date_lower, date_upper)
+        field_to_key = {"acido": "acid_consumed_acc", "cloro": "chlorine_consumed_acc"}
+        for created_at, field_name, value in events:
+            insume_key = field_to_key.get(field_name)
+            if not insume_key:
+                continue
+            day_key = created_at.strftime("%Y-%m-%d")
+            if day_key not in consumption_data:
+                consumption_data[day_key] = {}
+            consumption_data[day_key][insume_key] = float(value or 0)
+
     # Identifica FLXs associadas ao CCD
     flx_serials_associated_with_ccd = set()
     if has_ccd:
@@ -117,16 +215,21 @@ def generate_consumption_graphics(farm, date_lower, date_upper):
             if day_key not in consumption_data:
                 consumption_data[day_key] = {}
 
-            # Se FLX está associada ao CCD e o dia já tem água do CCD, não soma
-            if plate["serial"] in flx_serials_associated_with_ccd and day_key in days_with_ccd_water:
-                continue
-
-            current_water = consumption_data[day_key].get("water_consumed", 0)
+            # FLX e CCD associados medem a mesma água via rotas diferentes
+            # (uplink direto da FLX vs ESP-NOW → CCD). Firmware não retransmite
+            # amostras perdidas, então o MAIOR recupera o que cada rota capturou.
+            # Sem associação, somar (pontos de medição distintos).
             try:
-                consumption_data[day_key]["water_consumed"] = float(ev.water_consumed) + current_water
+                flx_value = float(ev.water_consumed)
             except Exception as e:
                 log.error(f"Erro ao processar water_consumed: {e}")
-                consumption_data[day_key]["water_consumed"] = current_water
+                flx_value = 0.0
+
+            current_water = consumption_data[day_key].get("water_consumed", 0)
+            if plate["serial"] in flx_serials_associated_with_ccd and day_key in days_with_ccd_water:
+                consumption_data[day_key]["water_consumed"] = max(current_water, flx_value)
+            else:
+                consumption_data[day_key]["water_consumed"] = current_water + flx_value
 
     # Adiciona temperatura (FLX)
     _Event = get_events_model("FLX")
@@ -149,11 +252,25 @@ def generate_consumption_graphics(farm, date_lower, date_upper):
         # Usa upload direto para Meta (mais confiável)
         response_list.append({"type": "image_upload", "url": image_url, "file_path": fname_with_dir})
 
+        quality = _compute_water_data_quality(plates, date_lower, date_upper, consumption_data)
+        if quality:
+            cobertura_pct = int(round(quality["coverage"] * 100))
+            faltando = _format_br_number(quality["missing_samples"])
+            perdido = _format_br_number(quality["consumo_perdido_estimado"])
+            msg = (
+                f"ℹ️ Qualidade do dado: as placas de fluxo enviaram "
+                f"{cobertura_pct}% das amostras esperadas no período "
+                f"({faltando} faltando). O consumo real pode ter sido "
+                f"~{perdido} L maior que o registrado no gráfico."
+            )
+            response_list.append({"type": "text", "msg": msg})
+
     # ========================================
     # 2. Gráfico de consumo WGT (dinâmico)
     # ========================================
     wgt_data = {}
     wgt_plate = None
+    gas_level_data = {}
 
     # Se tem CCD, verifica quais WGT estão associadas
     wgt_serials_associated_with_ccd = set()
@@ -236,8 +353,9 @@ def generate_consumption_graphics(farm, date_lower, date_upper):
             gas_level_data[day_key] = percentual
             log.info(f"WGT gas level - dia: {day_key}, gas_kg: {gas_disponivel}, percentual: {percentual}%")
 
-    # Gera gráfico WGT se houver dados
-    if wgt_data and wgt_plate:
+    # Gera gráfico WGT só se houver gás de fato (consumo ou nível > 0). Ácido/
+    # cloro da WGT já foram pro gráfico principal; sem gás não há 2º gráfico.
+    if wgt_data and wgt_plate and _has_gas_signal(wgt_data, gas_level_data):
         fname, fname_with_dir = graphics.consume_wgt(wgt_plate, wgt_data, temperature_sensors, gas_level_data)
         image_url = f"https://img.monitora.pro/space/{fname}"
         # Usa upload direto para Meta (mais confiável)
