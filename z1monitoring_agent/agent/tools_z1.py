@@ -3207,6 +3207,166 @@ def mudar_fonte_agua(fonte: str = None, granja: str = None, confirmado: bool = F
 
 
 # =============================================================================
+# 10c. AGENDAMENTO DE pH e AUDITORIA DA CCD — ops/admin.
+# agendar_ph só CRIA o PhSchedule: quem notifica na hora marcada é o
+# consolidation (beat a cada minuto) e quem aplica é o fastpath do canal
+# (ph_schedule_confirm_<id> — o prisma_api já trata). Portado do
+# backend_whatsapp (_execute_agendar_ph / handler_alteracao_ccd).
+# =============================================================================
+
+
+def _parse_data_hora(data_agendamento, hora_agendamento):
+    """datetime a partir de data 'YYYY-MM-DD' ou 'DD/MM[/AAAA]' + hora 'HH:MM'."""
+    d = str(data_agendamento or "").strip()
+    h = str(hora_agendamento or "").strip()
+    try:
+        if "-" in d:
+            from datetime import date as _date
+
+            dia = _date.fromisoformat(d[:10])
+        else:
+            partes = [int(p) for p in d.split("/")]
+            if len(partes) == 2:
+                partes.append(datetime.now().year)
+            if partes[2] < 100:
+                partes[2] += 2000
+            from datetime import date as _date
+
+            dia = _date(partes[2], partes[1], partes[0])
+        hh, mm = [int(p) for p in h.split(":")[:2]]
+        return datetime(dia.year, dia.month, dia.day, hh, mm)
+    except (TypeError, ValueError, IndexError):
+        return None
+
+
+@_require_write
+def agendar_ph(
+    ph_min: float,
+    ph_max: float,
+    data_agendamento: str,
+    hora_agendamento: str,
+    granja: str = None,
+    confirmado: bool = False,
+) -> dict:
+    """Agenda uma mudança futura de faixa de pH na CCD da granja."""
+    ctx = get_user_context()
+    try:
+        try:
+            ph_min = float(str(ph_min).replace(",", "."))
+            ph_max = float(str(ph_max).replace(",", "."))
+        except (TypeError, ValueError):
+            return {"erro": "Valores de pH inválidos."}
+        if ph_min >= ph_max:
+            return {"erro": "O pH mínimo deve ser menor que o máximo."}
+
+        farm, erro = _lote_resolver_farm(granja)
+        if erro:
+            return erro
+        plates = Plate.get_all({"farm_id": farm.id, "plate_type": ["CCD"]}) or []
+        if not plates:
+            return {"erro": f"{farm.name} não possui central de dosagem (CCD) — nada a agendar."}
+        plate = plates[0]
+
+        scheduled_dt = _parse_data_hora(data_agendamento, hora_agendamento)
+        if scheduled_dt is None:
+            return {"erro": "Data/hora inválida. Use data YYYY-MM-DD (ou DD/MM) e hora HH:MM."}
+        agora = datetime.now()
+        if scheduled_dt <= agora:
+            return {
+                "erro": "A data/hora do agendamento deve ser no futuro.",
+                "agora": agora.strftime("%Y-%m-%d %H:%M"),
+            }
+
+        if not confirmado:
+            return {
+                "requer_confirmacao": True,
+                "granja": farm.name,
+                "faixa_ph": f"{ph_min:g} a {ph_max:g}",
+                "quando": scheduled_dt.strftime("%d/%m/%Y às %H:%M"),
+                "mensagem": (
+                    f"Agendar mudança de pH para {ph_min:g}–{ph_max:g} em {farm.name}, "
+                    f"{scheduled_dt.strftime('%d/%m/%Y às %H:%M')}. Na hora marcada o usuário "
+                    "receberá botões pra confirmar a aplicação."
+                ),
+            }
+
+        from z1monitoring_models.models.ph_schedules import PhSchedule
+
+        schedule = PhSchedule({
+            "serial": plate.serial,
+            "farm_id": farm.id,
+            "farm_name": farm.name,
+            "ph_min": ph_min,
+            "ph_max": ph_max,
+            "scheduled_at": scheduled_dt,
+            "created_by": getattr(ctx.user, "name", None) if ctx else None,
+            "msisdn": ctx.msisdn if ctx else None,
+            "created_via": "prisma",
+        })
+        log.info("ph agendado via agente", schedule_id=schedule.id, farm=farm.name, quando=str(scheduled_dt))
+        return {
+            "acao": "ph_agendado",
+            "granja": farm.name,
+            "faixa_ph": f"{ph_min:g} a {ph_max:g}",
+            "quando": scheduled_dt.strftime("%d/%m/%Y às %H:%M"),
+            "mensagem": (
+                "Agendamento criado. Na data/hora marcada o usuário receberá uma "
+                "mensagem com botões pra confirmar a alteração antes de aplicar."
+            ),
+        }
+    except Exception as e:
+        log.exception("Erro ao agendar pH", error=str(e))
+        return {"erro": str(e)}
+
+
+def consultar_alteracoes_ccd(
+    granja: str,
+    usuario: str = None,
+    canal: str = None,
+    data_inicio: str = None,
+    data_fim: str = None,
+) -> dict:
+    """Histórico de alterações de parâmetros da CCD (auditoria): quem mudou o quê e quando."""
+    try:
+        farm = _resolve_farm_acl(granja)
+        if not farm:
+            return {"erro": f"Granja '{granja}' não encontrada"}
+
+        result = ChangesRequests.get_all_paginated(
+            local=farm.name,
+            locals_list=None,
+            user=usuario,
+            channel=canal,
+            date_time_low=data_inicio,
+            date_time_up=data_fim,
+            page=1,
+            per_page=10,
+        )
+        itens = result.get("data", []) if isinstance(result, dict) else []
+        alteracoes = [
+            {
+                "quando": i.get("created_at"),
+                "quem": i.get("user"),
+                "parametro": i.get("parameter"),
+                "valor_antigo": i.get("old_value"),
+                "valor_novo": i.get("value"),
+                "canal": i.get("channel"),
+                "confirmacao": i.get("confirmation_status"),
+            }
+            for i in itens
+        ]
+        return {
+            "granja": farm.name,
+            "total": result.get("total", len(alteracoes)) if isinstance(result, dict) else len(alteracoes),
+            "mostrando": len(alteracoes),
+            "alteracoes": alteracoes,
+        }
+    except Exception as e:
+        log.exception("Erro ao consultar alterações da CCD", error=str(e))
+        return {"erro": str(e)}
+
+
+# =============================================================================
 # 11. REGISTRO DE VISITA
 # =============================================================================
 
@@ -4729,6 +4889,51 @@ TOOLS_Z1 = [
             "required": [],
         },
         function=mudar_fonte_agua,
+    ),
+    # ===== AGENDAMENTO DE pH E AUDITORIA CCD =====
+    Tool(
+        name="agendar_ph",
+        description=(
+            "Agenda uma mudança FUTURA de faixa de pH na CCD da granja ('agenda o pH pra 6,5-7 amanhã "
+            "às 8h'). Na data/hora marcada o sistema manda botões pro usuário confirmar antes de "
+            "aplicar. Fluxo: chame sem confirmado (retorna requer_confirmacao) → botões "
+            "Confirmar/Cancelar → só após Confirmar, rechame com confirmado=true. Pra ajuste IMEDIATO "
+            "de pH use ajustar_faixa, não esta."
+        ),
+        parameters={
+            "type": "object",
+            "properties": {
+                "ph_min": {"type": "number", "description": "pH mínimo da faixa"},
+                "ph_max": {"type": "number", "description": "pH máximo da faixa"},
+                "data_agendamento": {"type": "string", "description": "Data futura YYYY-MM-DD (ou DD/MM)"},
+                "hora_agendamento": {"type": "string", "description": "Hora HH:MM"},
+                "granja": {"type": "string", "description": "Nome da granja (omita se o usuário só tem uma)"},
+                "confirmado": {"type": "boolean", "description": "true SOMENTE após o usuário clicar Confirmar"},
+            },
+            "required": ["ph_min", "ph_max", "data_agendamento", "hora_agendamento"],
+        },
+        function=agendar_ph,
+    ),
+    Tool(
+        name="consultar_alteracoes_ccd",
+        description=(
+            "Auditoria da CCD: histórico de quem alterou quais parâmetros e quando ('quem mexeu no pH "
+            "da granja X?', 'últimas alterações da CCD'). Retorna as 10 mais recentes com autor, "
+            "parâmetro, valor antigo/novo e canal. Filtros opcionais: usuário, canal "
+            "(whatsapp/web/api) e período."
+        ),
+        parameters={
+            "type": "object",
+            "properties": {
+                "granja": {"type": "string", "description": "Nome da granja (obrigatório — auditoria é por granja)"},
+                "usuario": {"type": "string", "description": "Filtrar por nome de quem alterou"},
+                "canal": {"type": "string", "enum": ["whatsapp", "web", "api"], "description": "Filtrar por canal"},
+                "data_inicio": {"type": "string", "description": "Início do período YYYY-MM-DD"},
+                "data_fim": {"type": "string", "description": "Fim do período YYYY-MM-DD"},
+            },
+            "required": ["granja"],
+        },
+        function=consultar_alteracoes_ccd,
     ),
     # ===== REGISTRO DE VISITA =====
     Tool(

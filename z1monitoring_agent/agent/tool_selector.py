@@ -33,6 +33,7 @@ TOOL_SETS = {
         "saude_empresa",
         "validar_flx_vs_ccd",
         "descrever_eta",
+        "consultar_alteracoes_ccd",
     ],
     "tempo_real": [
         "tempo_real",
@@ -46,6 +47,8 @@ TOOL_SETS = {
         "controlar_abs",
         "definir_limite_24h",
         "ajustar_oz1",
+        "agendar_ph",
+        "consultar_alteracoes_ccd",
         "enviar_botoes_confirmacao",
         "confirmar_ajuste_parametro",
     ],
@@ -102,7 +105,7 @@ Use o histórico da conversa para entender o contexto.
 CATEGORIAS:
 - consulta_status: alarmes, equipamentos offline/online, falta de insumo, falta de gás, sensor fora da faixa, problemas
 - tempo_real: ver dados em tempo real, status de uma granja, análise de água, panorama 24h
-- ajuste_parametros: alterar pH, ORP, dosadora, ABS, limite 24h, ozônio, modo cíclico/automático
+- ajuste_parametros: alterar pH, ORP, dosadora, ABS, limite 24h, ozônio, modo cíclico/automático, agendar mudança de pH, quem alterou parâmetros (auditoria CCD)
 - controle_equipamento: ligar/desligar bomba, válvula, alarme de galpão
 - lote: abrir/fechar lote (avicultura), mortalidade ("morreram X"), ração recebida, relatório/ficha do lote
 - ppm: usuário INFORMA valor de cloro que mediu ("medi 1,02", "deu 2 de cloro") ou manda foto do medidor; trocar fonte de água da granja (poço/rio/cisterna/açude)
