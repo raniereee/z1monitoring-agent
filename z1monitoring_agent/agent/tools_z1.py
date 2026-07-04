@@ -3920,6 +3920,10 @@ def ranking_offline(dias: int = 30, gap_minutos: int = 15) -> dict:
         # Buscar granjas do usuário
         if ctx and ctx.is_admin:
             farms = Farm.get_all_farms_obj()
+        elif ctx and ctx.permission_name in _PRIMARY_PERM_NAMES:
+            # Representante primário: granjas via associateds_allowed (o
+            # filtro por owner retornava vazio pra esse perfil)
+            farms = Farm.get_all_that_associated_allowed_permitted(ctx.associated)
         elif ctx:
             farms = Farm.get_all_farms_objs_filtereds({"owner": ctx.associated})
         else:
@@ -3993,6 +3997,17 @@ def saude_empresa(empresa: str, problema: str = "todos", dias_minimo: int = 0) -
         matches = ClientPrimary.get_all_associated_by_name(empresa)
         if not matches:
             return {"erro": f"Empresa '{empresa}' nao encontrada"}
+
+        # ACL: ADMIN consulta qualquer empresa; representante primário SÓ a
+        # própria (ctx.associated é o CNPJ do cliente primário dele); demais
+        # perfis (FARM etc.) não têm visão por empresa.
+        if ctx and not ctx.is_admin:
+            if ctx.permission_name in _PRIMARY_PERM_NAMES:
+                matches = [m for m in matches if m.cnpj == ctx.associated]
+                if not matches:
+                    return {"erro": "Você só pode consultar a saúde da sua própria empresa."}
+            else:
+                return {"erro": "Consulta por empresa é exclusiva de administradores e representantes."}
         pc = matches[0]
         ambiguidade = (
             [m.fantasy_name for m in matches[1:6]] if len(matches) > 1 else None
@@ -4127,11 +4142,12 @@ def consultar_periodos_offline(granja: str, tipo_placa: str = None, dias: int = 
     try:
         from z1monitoring_models.models.choose_event_model import get_offline_gaps
 
-        # Buscar granja
+        # Buscar granja (com ACL — sem enforce aqui, qualquer usuário veria
+        # períodos offline de granja alheia)
         candidates = _get_farm_candidates(granja)
         if not candidates:
             return {"erro": f"Granja '{granja}' nao encontrada"}
-        farm = Farm.load(candidates[0])
+        farm = _enforce_farm_access(Farm.load(candidates[0]))
         if not farm:
             return {"erro": f"Granja '{granja}' nao encontrada"}
 
