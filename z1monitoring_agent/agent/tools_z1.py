@@ -232,10 +232,69 @@ def _require_write(fn):
     return wrapper
 
 
+_FARM_PREFIXES = ("granja ", "fazenda ", "sitio ", "sítio ", "chacara ", "chácara ", "aviario ", "aviário ")
+
+
+def _norm_no_prefix(s):
+    """Normaliza (lower, sem acento) e tira prefixos tipo 'Granja '."""
+    import unicodedata
+
+    nfkd = unicodedata.normalize("NFKD", s or "")
+    t = "".join(c for c in nfkd if not unicodedata.combining(c)).lower().strip()
+    for p in _FARM_PREFIXES:
+        if t.startswith(p):
+            t = t[len(p):].strip()
+    return t
+
+
+def _farm_names_in_scope(ctx):
+    """Nomes de granja visíveis pro usuário (admin = todas)."""
+    if not ctx or ctx.is_admin:
+        farms = Farm.get_all_farms_objs_filtereds({}) or []
+        return [f.name for f in farms if f.name]
+    return [n for n in (_get_allowed_farm_names(ctx) or []) if n]
+
+
+def _farm_similares(nome, top_n=15):
+    """Top-N granjas do escopo por similaridade léxica (sem prefixo)."""
+    from difflib import SequenceMatcher
+
+    alvo = _norm_no_prefix(nome)
+    if not alvo:
+        return []
+    names = _farm_names_in_scope(get_user_context())
+    scored = sorted(
+        ((SequenceMatcher(None, alvo, _norm_no_prefix(n)).ratio(), n) for n in names),
+        reverse=True,
+    )
+    return scored[:top_n]
+
+
+def _fuzzy_farm_in_scope(nome):
+    """Fallback fuzzy DENTRO do escopo do usuário quando a busca do banco
+    falha (ex: 'bak' → 'Granja Back' — o SIMILARITY do banco compara com o
+    nome COM prefixo e fica abaixo do threshold). Auto-resolve só com match
+    forte e sem vice próximo; o resto fica pro fluxo de desambiguação."""
+    scored = _farm_similares(nome, top_n=2)
+    if not scored:
+        return None
+    best_score, best_name = scored[0]
+    second_score = scored[1][0] if len(scored) > 1 else 0.0
+    if best_score >= 0.75 and (best_score - second_score) >= 0.1:
+        farm = Farm.load(best_name)
+        if farm:
+            log.info("farm fuzzy resolvida", pedido=nome, granja=best_name, score=round(best_score, 2))
+            return _enforce_farm_access(farm)
+    return None
+
+
 def _resolve_farm_acl(nome):
-    """Wrapper de Farm.get_farm_like_sensibility que aplica ACL por escopo do user."""
-    farm = Farm.get_farm_like_sensibility(nome)
-    return _enforce_farm_access(farm)
+    """Wrapper de Farm.get_farm_like_sensibility que aplica ACL por escopo do
+    user, com fallback fuzzy no escopo (apelidos/grafia fonética do áudio)."""
+    farm = _enforce_farm_access(Farm.get_farm_like_sensibility(nome))
+    if farm:
+        return farm
+    return _fuzzy_farm_in_scope(nome)
 
 
 _PLATE_TYPE_CATEGORIA = {
@@ -1091,7 +1150,20 @@ def buscar_granja(nome: str) -> dict:
             # Tenta fuzzy match
             farm = _resolve_farm_acl(nome)
             if not farm:
-                return {"encontrada": False, "mensagem": f"Granja '{nome}' não encontrada"}
+                # Sem match direto: devolve as mais parecidas do ESCOPO pro
+                # agente escolher foneticamente (nome vem do áudio com grafia
+                # divergente: Back≈Bak, Wassmuth≈Vasmute, Kolling≈Colin).
+                similares = [n for _, n in _farm_similares(nome, top_n=15)]
+                return {
+                    "encontrada": False,
+                    "similares": similares,
+                    "mensagem": (
+                        f"Nenhum match direto para '{nome}'. Compare PELO SOM com a lista "
+                        "'similares' (sotaque alemão/polonês: W≈V, K≈C/QU, CK≈K, SCH≈X) e "
+                        "use o nome exato correspondente; se houver mais de um candidato "
+                        "plausível ou nenhum, pergunte ao usuário."
+                    ),
+                }
             candidates = [farm.name]
 
         if len(candidates) > 1:
