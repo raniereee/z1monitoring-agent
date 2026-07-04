@@ -61,6 +61,11 @@ TOOL_SETS = {
         "relatorio_lote",
         "enviar_botoes_confirmacao",
     ],
+    "ppm": [
+        "registrar_ppm",
+        "mudar_fonte_agua",
+        "enviar_botoes_confirmacao",
+    ],
     "relatorios": [
         "consumo",
         "analise_consumo_detalhada",
@@ -100,6 +105,7 @@ CATEGORIAS:
 - ajuste_parametros: alterar pH, ORP, dosadora, ABS, limite 24h, ozônio, modo cíclico/automático
 - controle_equipamento: ligar/desligar bomba, válvula, alarme de galpão
 - lote: abrir/fechar lote (avicultura), mortalidade ("morreram X"), ração recebida, relatório/ficha do lote
+- ppm: usuário INFORMA valor de cloro que mediu ("medi 1,02", "deu 2 de cloro") ou manda foto do medidor; trocar fonte de água da granja (poço/rio/cisterna/açude)
 - relatorios: gráfico de consumo, relatório de gás, ranking de granjas, apanhado/panorama/análise geral de várias granjas
 - granjas_clientes: listar granjas, buscar cliente, informações de clientes primários, panorama de TODAS as granjas de um cliente primário (ex: "BIOTER", "Copacol", "Avioeste")
 - outros: registrar visita, dimensionar ETA, suporte, ajuda, menu

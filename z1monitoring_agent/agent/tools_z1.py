@@ -3033,6 +3033,180 @@ def relatorio_lote(granja: str = None, galpao: str = None, numero_lote: int = No
 
 
 # =============================================================================
+# 10b. PPM (medição manual de cloro) e FONTE DE ÁGUA — produtor ETA.
+# Mecânica portada do backend_whatsapp (ppm_actions.py / water_source_actions.py).
+# Regras duras: sem snapshot do CCD não grava PPM (o snapshot alimenta o
+# regressor); o ponto de medição NUNCA é inferido como ETA quando a granja
+# tem galpões — pergunta-se. Restrito a FARM (e ADMIN).
+# =============================================================================
+
+# Medidores AKSO AK40 vão de 0 a 3,5 ppm; folga até 20 pra outros instrumentos.
+_PPM_MIN = 0.0
+_PPM_MAX = 20.0
+
+
+def _ppm_ccd_snapshot(farm):
+    """(snapshot, erro). Última leitura do CCD — obrigatória pro registro de PPM."""
+    plates = Plate.get_all({"farm_id": farm.id, "plate_type": ["CCD"]}) or []
+    if not plates:
+        return None, {
+            "erro": f"A granja {farm.name} não tem central de dosagem (CCD) — "
+            "o registro de PPM precisa da leitura do sensor junto."
+        }
+    plate = plates[0]
+    raw = EventCCD.get_latest_reading(plate.owner, plate.serial)
+    if not raw:
+        return None, {
+            "erro": f"A central de dosagem de {farm.name} está sem leitura recente — "
+            "não dá pra registrar o PPM agora."
+        }
+    return {
+        "orp": _num_ccd(raw, "ORP", "orp"),
+        "ph": _num_ccd(raw, "PH", "pH", "ph"),
+        "temperature": _num_ccd(raw, "Temperatura da Água", "Temperatura da água", "temperature"),
+    }, None
+
+
+def _ppm_resolver_ponto(farm, ponto_medicao):
+    """(ponto, erro). NUNCA infere ETA do nada: só assume ETA quando o usuário
+    disse ETA/estação ou quando a granja não tem galpões (única opção)."""
+    from unidecode import unidecode
+
+    galpoes = Galpao.get_by_farm(farm.id) or []
+    if ponto_medicao:
+        t = unidecode(str(ponto_medicao).strip().lower())
+        if t == "eta" or t.startswith("estacao") or "estacao de tratamento" in t:
+            return "ETA", None
+        achados = _lote_match_galpoes(galpoes, ponto_medicao)
+        if len(achados) == 1:
+            return achados[0].nome, None
+        return None, {
+            "requer_escolha": "ponto_medicao",
+            "opcoes": ["ETA"] + [g.nome for g in galpoes],
+            "mensagem": f"Não resolvi o ponto '{ponto_medicao}'. Pergunte onde a amostra "
+            "foi colhida (ETA ou qual galpão/bebedouro).",
+        }
+    if not galpoes:
+        return "ETA", None
+    return None, {
+        "requer_escolha": "ponto_medicao",
+        "opcoes": ["ETA"] + [g.nome for g in galpoes],
+        "mensagem": "Pergunte onde a amostra foi colhida: na ETA ou no bebedouro de qual galpão. "
+        "NÃO assuma ETA sem o usuário dizer.",
+    }
+
+
+@_require_write
+def registrar_ppm(ppm: float, granja: str = None, ponto_medicao: str = None, metodo: str = None) -> dict:
+    """Registra a medição manual de cloro livre (ppm) do produtor, com snapshot do CCD."""
+    ctx = get_user_context()
+    denied = _lote_farm_denied(ctx)
+    if denied:
+        return denied
+    try:
+        try:
+            valor = float(str(ppm).replace(",", "."))
+        except (TypeError, ValueError):
+            valor = None
+        if valor is None or not (_PPM_MIN < valor <= _PPM_MAX):
+            return {
+                "erro": "Valor de PPM inválido — peça só o número medido no colorímetro "
+                "(ex.: 1,02). Faixa aceita: acima de 0 até 20."
+            }
+
+        farm, erro = _lote_resolver_farm(granja)
+        if erro:
+            return erro
+        snap, erro = _ppm_ccd_snapshot(farm)
+        if erro:
+            return erro
+        ponto, erro = _ppm_resolver_ponto(farm, ponto_medicao)
+        if erro:
+            return erro
+
+        method = "photo_ocr" if (metodo or "").lower() in ("foto", "photo", "photo_ocr", "imagem") else "declared"
+        readings = {
+            "ppm": valor,
+            "measurement_method": method,
+            "eta": {"orp": snap.get("orp"), "ph": snap.get("ph"), "temperature": snap.get("temperature")},
+        }
+        if getattr(farm, "water_source", None):
+            # Carimbo da fonte vigente (química da fonte, usada pelo regressor).
+            readings["water_source"] = farm.water_source
+
+        reading = PpmReading(
+            owner=farm.owner,
+            readings=readings,
+            farm_id=farm.id,
+            farm_associated=farm.name,
+            local=str(ponto)[:128],
+            created_by=getattr(ctx.user, "name", None) if ctx else None,
+        )
+        log.info("ppm registrado via agente", reading_id=reading.id, farm=farm.name, ppm=valor, ponto=ponto)
+        return {
+            "acao": "ppm_registrado",
+            "granja": farm.name,
+            "ponto": ponto,
+            "ppm": valor,
+            "metodo": method,
+            "sensor_eta": readings["eta"],
+        }
+    except Exception as e:
+        log.exception("Erro ao registrar PPM", error=str(e))
+        return {"erro": str(e)}
+
+
+@_require_write
+def mudar_fonte_agua(fonte: str = None, granja: str = None, confirmado: bool = False) -> dict:
+    """Muda a fonte de água da granja (carimba as próximas medições de PPM)."""
+    from z1monitoring_models.constants import WATER_SOURCES, WATER_SOURCE_LABELS
+
+    ctx = get_user_context()
+    denied = _lote_farm_denied(ctx)
+    if denied:
+        return denied
+    try:
+        farm, erro = _lote_resolver_farm(granja)
+        if erro:
+            return erro
+
+        atual = getattr(farm, "water_source", None)
+        if not fonte or fonte not in WATER_SOURCES:
+            return {
+                "requer_escolha": "fonte",
+                "fonte_atual": WATER_SOURCE_LABELS.get(atual, atual),
+                "opcoes": [{"chave": k, "label": WATER_SOURCE_LABELS[k]} for k in WATER_SOURCES],
+                "mensagem": "Pergunte pra qual fonte mudar e rechame com a chave canônica em `fonte`.",
+            }
+        if not confirmado:
+            return {
+                "requer_confirmacao": True,
+                "granja": farm.name,
+                "fonte_atual": WATER_SOURCE_LABELS.get(atual, atual or "não informada"),
+                "fonte_nova": WATER_SOURCE_LABELS[fonte],
+                "mensagem": (
+                    f"Mudar a fonte de água de {farm.name} "
+                    f"de {WATER_SOURCE_LABELS.get(atual, atual or 'não informada')} "
+                    f"para {WATER_SOURCE_LABELS[fonte]}. As próximas medições de PPM "
+                    "serão carimbadas com a nova fonte."
+                ),
+            }
+
+        farm.water_source = fonte
+        Farm.update(farm)
+        log.info("fonte de agua alterada via agente", farm_id=farm.id, fonte=fonte,
+                 by=getattr(ctx.user, "name", None) if ctx else None)
+        return {
+            "acao": "fonte_agua_alterada",
+            "granja": farm.name,
+            "fonte": WATER_SOURCE_LABELS[fonte],
+        }
+    except Exception as e:
+        log.exception("Erro ao mudar fonte de água", error=str(e))
+        return {"erro": str(e)}
+
+
+# =============================================================================
 # 11. REGISTRO DE VISITA
 # =============================================================================
 
@@ -4510,6 +4684,51 @@ TOOLS_Z1 = [
             "required": [],
         },
         function=relatorio_lote,
+    ),
+    # ===== PPM E FONTE DE ÁGUA =====
+    Tool(
+        name="registrar_ppm",
+        description=(
+            "Registra a medição MANUAL de cloro livre (ppm) que o produtor fez no colorímetro — "
+            "grava direto, sem confirmação. Use quando o usuário INFORMA um valor medido "
+            "('medi 1,02', 'deu 2 de cloro na ETA') ou manda FOTO do medidor de cloro — nesse caso "
+            "leia o valor do display na imagem, use metodo='foto' e diga ao usuário o valor lido. "
+            "NUNCA confunda com consulta de sensor (ORP): ppm é a medição manual. O registro exige "
+            "leitura recente da CCD (vai junto como snapshot). ponto_medicao = onde a amostra foi "
+            "colhida ('ETA' ou o galpão/bebedouro) — se o usuário não disse, a tool pede escolha; "
+            "NÃO assuma ETA. Só contas de produtor (FARM)."
+        ),
+        parameters={
+            "type": "object",
+            "properties": {
+                "ppm": {"type": "number", "description": "Valor medido de cloro livre (aceita vírgula: '1,02' = 1.02). Faixa: >0 a 20"},
+                "granja": {"type": "string", "description": "Nome da granja (omita se o usuário só tem uma)"},
+                "ponto_medicao": {"type": "string", "description": "Onde colheu a amostra: 'ETA' ou nome/número do galpão"},
+                "metodo": {"type": "string", "enum": ["declarado", "foto"], "description": "'foto' quando o valor foi lido de imagem do medidor"},
+            },
+            "required": ["ppm"],
+        },
+        function=registrar_ppm,
+    ),
+    Tool(
+        name="mudar_fonte_agua",
+        description=(
+            "Muda a fonte de água da granja (carimbada nas próximas medições de PPM). Fontes: rio, "
+            "poco_artesiano ('poço'/'artesiano'), cisterna, acude, misto. Fluxo: chame sem confirmado "
+            "(retorna requer_confirmacao) → botões Confirmar/Cancelar → só após Confirmar, rechame com "
+            "confirmado=true. Sem fonte informada, a tool devolve a atual e as opções — apresente e "
+            "rechame. Só contas de produtor (FARM)."
+        ),
+        parameters={
+            "type": "object",
+            "properties": {
+                "fonte": {"type": "string", "enum": ["rio", "poco_artesiano", "cisterna", "acude", "misto"], "description": "Fonte canônica"},
+                "granja": {"type": "string", "description": "Nome da granja (omita se o usuário só tem uma)"},
+                "confirmado": {"type": "boolean", "description": "true SOMENTE após o usuário clicar Confirmar"},
+            },
+            "required": [],
+        },
+        function=mudar_fonte_agua,
     ),
     # ===== REGISTRO DE VISITA =====
     Tool(
