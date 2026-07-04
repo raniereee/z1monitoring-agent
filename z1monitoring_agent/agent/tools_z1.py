@@ -4667,7 +4667,7 @@ TOOLS_Z1 = [
     ),
     Tool(
         name="controlar_abs",
-        description="Controla o ABS (freio automático de limite 24h). Liberar = destravar/desbloquear injeção. Rearmar = reativar freio automático.",
+        description="Controla o ABS (freio automático de limite 24h). Liberar = destravar/desbloquear/soltar a injeção. Rearmar = travar/armar/reativar o freio automático. Requer confirmação.",
         parameters={
             "type": "object",
             "properties": {
@@ -4778,7 +4778,7 @@ TOOLS_Z1 = [
     # ===== DADOS E RELATÓRIOS =====
     Tool(
         name="consumo",
-        description="Consulta consumo de ácido, cloro e água de uma granja. Formato 'dados' retorna números por dia. Formato 'grafico' gera imagem e envia ao usuário.",
+        description="Consulta consumo de ácido, cloro e água de uma granja. Formato 'dados' retorna números por dia. Formato 'grafico' gera as imagens e as envia DIRETAMENTE ao usuário — apenas confirme o envio, sem descrever os gráficos.",
         parameters={
             "type": "object",
             "properties": {
@@ -4792,7 +4792,7 @@ TOOLS_Z1 = [
     ),
     Tool(
         name="analise_consumo_detalhada",
-        description="Análise profunda de consumo: consumo diário de água/ácido/cloro, perfil horário comparativo, períodos offline do FLX, e detecção de variações significativas. Use quando o usuário pedir análise completa, investigação de queda/aumento de consumo, ou diagnóstico de problemas.",
+        description="Análise profunda de consumo: consumo diário de água/ácido/cloro, perfil horário comparativo, períodos offline do FLX, e detecção de variações significativas. Use quando o usuário pedir análise completa, investigação de queda/aumento de consumo, ou diagnóstico de problemas. Trabalha em GRANULARIDADE DIÁRIA: período em horas arredonda pra cima (36h → dias=2) e você DECLARA o arredondamento na resposta.",
         parameters={
             "type": "object",
             "properties": {
@@ -4832,7 +4832,7 @@ TOOLS_Z1 = [
     ),
     Tool(
         name="relatorio_gas",
-        description="Relatório de gás. Tipo 'consumo': nível, consumo médio e autonomia. Tipo 'abastecimento': abastecimentos dos últimos 30 dias.",
+        description="Relatório de gás. Tipo 'consumo': nível, consumo médio e autonomia. Tipo 'abastecimento': abastecimentos dos últimos 30 dias. Para perguntas sobre gás use esta ou consultar_status(tipo='falta_gas') — NÃO consulte offline junto.",
         parameters={
             "type": "object",
             "properties": {
@@ -4845,7 +4845,7 @@ TOOLS_Z1 = [
     ),
     Tool(
         name="ranking_granjas",
-        description="Obtém ranking de desempenho das granjas em um período.",
+        description="Obtém ranking de desempenho das granjas em um período. ANÁLISE PESADA E DEMORADA: chame notificar_usuario ('análise mais pesada, aguarde...') ANTES desta tool.",
         parameters={
             "type": "object",
             "properties": {
@@ -4860,6 +4860,9 @@ TOOLS_Z1 = [
         description=(
             "Panorama das últimas 24h: placas online/offline, alarmes, consumo de "
             "ácido/cloro e leituras atuais de pH/ORP/temperatura, por granja. "
+            "Para 'panorama/apanhado geral' de um CLIENTE PRIMÁRIO (BIOTER, Copacol, "
+            "Avioeste...), use cliente_primario= — NUNCA passe cliente primário em "
+            "granja= (capturaria uma granja errada) nem chame buscar_granja antes. "
             "Use os dados EXATOS que vierem no retorno — NÃO invente granjas, "
             "sensores, valores ou alertas que não estejam no payload."
         ),
@@ -4867,6 +4870,7 @@ TOOLS_Z1 = [
             "type": "object",
             "properties": {
                 "granja": {"type": "string", "description": "Nome da granja (opcional, filtra a apenas uma)"},
+                "cliente_primario": {"type": "string", "description": "Nome do cliente primário — cobre todas as granjas vinculadas"},
             },
             "required": [],
         },
@@ -5144,7 +5148,8 @@ TOOLS_Z1 = [
         description="Dimensiona uma ETA (Estação de Tratamento de Água) com pré-tratamento por ozônio. "
                     "Use quando o usuário enviar uma análise de água (imagem ou texto) e consumo diário. "
                     "Extrai os parâmetros da análise e calcula: gerador de ozônio (g/h), faixa de pH, faixa de ORP, "
-                    "tanque de contato e filtração. Gera e envia um PDF com o dimensionamento.",
+                    "tanque de contato e filtração. Preencha APENAS os parâmetros presentes na análise (não estime); "
+                    "pergunte o consumo diário se não foi informado. Gera e envia um PDF automaticamente.",
         parameters={
             "type": "object",
             "properties": {
@@ -5186,7 +5191,8 @@ TOOLS_Z1 = [
     Tool(
         name="ranking_offline",
         description="Ranking das granjas/placas que ficam mais tempo offline. "
-                    "Útil para identificar problemas recorrentes de comunicação.",
+                    "Útil para identificar problemas recorrentes de comunicação. "
+                    "ANÁLISE PESADA: chame notificar_usuario antes desta tool.",
         parameters={
             "type": "object",
             "properties": {
@@ -5203,7 +5209,8 @@ TOOLS_Z1 = [
         description="Verifica a saúde das granjas de uma empresa. "
                     "Identifica placas offline, sem ácido, sem cloro, pH/ORP fora da faixa, ABS desativados. "
                     "Mostra há quantos dias cada problema está ativo. "
-                    "Use quando perguntarem sobre problemas de uma empresa, quantas granjas com problema, etc.",
+                    "Use quando perguntarem sobre problemas de uma empresa, quantas granjas com problema, etc. "
+                    "O parâmetro empresa espera o NOME do cliente primário (não de granja).",
         parameters={
             "type": "object",
             "properties": {
@@ -5227,7 +5234,8 @@ TOOLS_Z1 = [
     Tool(
         name="consultar_periodos_offline",
         description="Analisa gaps nos registros de eventos para identificar períodos em que uma placa ficou offline (sem comunicar). "
-                    "Útil para entender impacto no consumo acumulado e identificar problemas de comunicação.",
+                    "Útil para entender impacto no consumo acumulado e identificar problemas de comunicação. "
+                    "ANÁLISE PESADA: chame notificar_usuario antes desta tool.",
         parameters={
             "type": "object",
             "properties": {
