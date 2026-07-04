@@ -23,12 +23,19 @@ from .tools import Tool
 
 # Models
 from z1monitoring_models.models.urgent_alarm import UrgentAlarm
+from z1monitoring_models.models.urgent_alarm_phone import UrgentAlarmPhones
 from z1monitoring_models.models.farm import Farm
 from z1monitoring_models.models.plates import Plate
 from z1monitoring_models.models.changes_requests import ChangesRequests
 from z1monitoring_models.models.plates_state import PlateState
+from z1monitoring_models.models.galpao import Galpao
+from z1monitoring_models.models.lote import Lote
+from z1monitoring_models.models.integradora import Integradora
+from z1monitoring_models.models.ppm_readings import PpmReading
+from z1monitoring_models.models.events_ccd import EventCCD
 
 from z1monitoring_agent.utils.eta_dimensioning import calculate_eta, generate_pdf
+from z1monitoring_agent.utils.lote_report import gerar_pdf_lote, TIPOS_MORTE, TIPOS_RACAO
 from z1monitoring_agent.agent.eta_timeline import condense_eta_timeline
 
 
@@ -2416,39 +2423,612 @@ def consultar_quadros_com_problema() -> dict:
 
 
 # =============================================================================
-# 10. LOTES
+# 10. LOTES (avicultura) — abrir/fechar, mortalidade, ração e ficha em PDF.
+# Mecânica portada do backend_whatsapp (lote_actions.py / relatorio_actions.py):
+# 1 lote aberto por galpão (fim IS NULL = aberto); abrir liga os alarmes das
+# IOX do galpão e fechar desliga; lote fechado NUNCA é editado por aqui (só
+# pelo sistema web). Restrito a contas de produtor (FARM) — e ADMIN.
 # =============================================================================
+
+_GENERO_MAP = {"macho": "masculino", "femea": "feminino", "misto": "misto"}
+
+
+def _lote_farm_denied(ctx):
+    """Lote é função de produtor: exige permissão FARM (ou ADMIN)."""
+    if ctx and (ctx.is_admin or ctx.permission_name == "FARM"):
+        return None
+    return {"erro": "Essa função é exclusiva das contas de produtor (granja)."}
+
+
+def _lote_resolver_farm(granja):
+    """Resolve a granja pra fluxo de lote. Sem nome, auto-resolve quando o
+    usuário só tem uma granja; com várias, devolve a lista pro agente perguntar."""
+    ctx = get_user_context()
+    if granja:
+        farm = _resolve_farm_acl(granja)
+        if not farm:
+            return None, {"erro": f"Granja '{granja}' não encontrada"}
+        return farm, None
+    if not ctx or ctx.is_admin or not ctx.associated:
+        return None, {"erro": "Informe a granja."}
+    farms = Farm.get_all_farms_objs_filtereds({"owner": ctx.associated}) or []
+    if not farms:
+        return None, {"erro": "Não encontrei granjas vinculadas a você."}
+    if len(farms) > 1:
+        return None, {
+            "requer_escolha": "granja",
+            "granjas": [f.name for f in farms],
+            "mensagem": "Usuário tem mais de uma granja — pergunte em qual.",
+        }
+    return farms[0], None
+
+
+def _lote_match_galpoes(galpoes, raw):
+    """Filtra galpões pelo que o usuário falou (número ou nome, acento-insensível).
+    Lista vazia = nada bateu."""
+    from unidecode import unidecode
+
+    t = unidecode(str(raw).strip().lower())
+    achados = []
+    for g in galpoes:
+        nome = unidecode((g.nome or "").strip().lower())
+        numero = str(g.numero) if g.numero is not None else None
+        digitos = "".join(ch for ch in t if ch.isdigit())
+        if t == nome or t in nome or nome in t:
+            achados.append(g)
+        elif numero and digitos and digitos == numero:
+            achados.append(g)
+    return achados
+
+
+def _lote_dia_iso(raw):
+    from datetime import date
+
+    try:
+        return date.fromisoformat(str(raw)[:10]).isoformat() if raw else date.today().isoformat()
+    except (TypeError, ValueError):
+        return date.today().isoformat()
+
+
+def _toggle_iox_alarms(galpao_id, enable):
+    """Liga/desliga os alarmes urgentes das IOX do galpão (vínculo via
+    plates.galpao_id). Só alterna IOX que JÁ têm alarme configurado em
+    urgent_alarm_phones — sem registro é no-op silencioso. Retorna o nº de
+    IOX efetivamente alternadas."""
+    n = 0
+    for p in Plate.get_iox_by_galpao(galpao_id) or []:
+        serial = getattr(p, "serial", None)
+        if not serial:
+            continue
+        if UrgentAlarmPhones.get_all_from_serial(serial) is None:
+            continue
+        try:
+            if enable:
+                UrgentAlarmPhones.enable_alarm(serial)
+            else:
+                UrgentAlarmPhones.disable_alarm(serial)
+            n += 1
+        except Exception as e:
+            log.warning("falha ao alternar alarme IOX", serial=serial, enable=enable, error=str(e))
+    return n
+
+
+def _lote_galpoes(farm, galpao):
+    """(galpoes, erro). Resolve os galpões da granja, filtrados pelo nome dito."""
+    galpoes = Galpao.get_by_farm(farm.id) or []
+    if not galpoes:
+        return None, {
+            "erro": f"A granja '{farm.name}' não tem galpões cadastrados. "
+            "O galpão precisa ser cadastrado no sistema web antes."
+        }
+    if galpao:
+        achados = _lote_match_galpoes(galpoes, galpao)
+        if not achados:
+            return None, {
+                "erro": f"Não achei o galpão '{galpao}' em {farm.name}.",
+                "galpoes_existentes": [g.nome for g in galpoes],
+            }
+        galpoes = achados
+    return galpoes, None
+
+
+def _lote_aberto_ausente(galpoes, farm):
+    """Resposta padrão quando não há lote aberto: se o último lote é fechado,
+    edição é só pelo web; senão orienta abrir um lote."""
+    ultimo, g_ultimo = None, None
+    for g in galpoes:
+        lotes = Lote.get_by_galpao(g.id) or []
+        if lotes and lotes[0].fim is not None:
+            lo = lotes[0]
+            if ultimo is None or (lo.fim and ultimo.fim and lo.fim > ultimo.fim):
+                ultimo, g_ultimo = lo, g
+    if ultimo is not None:
+        fim_str = ultimo.fim.strftime("%d/%m/%Y") if hasattr(ultimo.fim, "strftime") else str(ultimo.fim)
+        return {
+            "erro": "lote_fechado",
+            "mensagem": (
+                f"O lote nº {ultimo.numero} do galpão {g_ultimo.nome} ({farm.name}) foi "
+                f"fechado em {fim_str}. Lançar ou alterar dados de lote fechado é só pelo "
+                "sistema web, na ficha do lote. Se quer começar um lote novo, ofereça abrir_lote."
+            ),
+        }
+    return {
+        "erro": "sem_lote_aberto",
+        "mensagem": f"Não há lote aberto em {farm.name}. Ofereça ao usuário abrir um lote (abrir_lote).",
+    }
 
 
 @_require_write
-def controlar_lote(granja: str, acao: str, galpao: str = None) -> dict:
-    """
-    Inicia ou finaliza um lote em uma granja/galpão.
+def abrir_lote(
+    granja: str = None,
+    galpao: str = None,
+    quantidade_animais: int = None,
+    genero: str = None,
+    data_inicio: str = None,
+    confirmado: bool = False,
+) -> dict:
+    """Abre um lote num galpão (ficha opcional) e liga os alarmes das IOX."""
+    from datetime import date
 
-    Args:
-        granja: Nome da granja
-        acao: iniciar ou finalizar
-        galpao: Nome do galpão (opcional)
-
-    Returns:
-        Solicitação de controle de lote
-    """
+    ctx = get_user_context()
+    denied = _lote_farm_denied(ctx)
+    if denied:
+        return denied
     try:
-        farm = _resolve_farm_acl(granja)
-        if not farm:
-            return {"erro": f"Granja '{granja}' não encontrada"}
+        farm, erro = _lote_resolver_farm(granja)
+        if erro:
+            return erro
+        galpoes, erro = _lote_galpoes(farm, galpao)
+        if erro:
+            return erro
+        if len(galpoes) > 1:
+            return {
+                "requer_escolha": "galpao",
+                "galpoes": [g.nome for g in galpoes],
+                "mensagem": f"Pergunte em qual galpão de {farm.name} abrir o lote.",
+            }
+        g = galpoes[0]
+        if Lote.get_open_by_galpao(g.id):
+            return {
+                "erro": f"Já existe um lote aberto no galpão {g.nome}. "
+                "É preciso fechar o atual antes de abrir um novo."
+            }
 
-        label = "início" if acao == "iniciar" else "fim"
+        inicio_iso = _lote_dia_iso(data_inicio)
+        tem_ficha = any(v is not None for v in (quantidade_animais, genero, data_inicio))
+        if not confirmado:
+            return {
+                "requer_confirmacao": True,
+                "granja": farm.name,
+                "galpao": g.nome,
+                "inicio": inicio_iso,
+                "quantidade_animais": quantidade_animais,
+                "genero": genero,
+                "ficha_vazia": not tem_ficha,
+                "mensagem": (
+                    f"Abrir lote no galpão {g.nome} ({farm.name}), início "
+                    f"{date.fromisoformat(inicio_iso).strftime('%d/%m/%Y')}. "
+                    "Os alarmes urgentes das IOX do galpão serão habilitados."
+                ),
+            }
+
+        data = {}
+        genero_norm = _GENERO_MAP.get((genero or "").lower())
+        if genero_norm:
+            data["genero"] = genero_norm
+        if quantidade_animais is not None:
+            try:
+                data["animais_alojados"] = int(quantidade_animais)
+            except (TypeError, ValueError):
+                pass
+        lote = Lote(
+            farm_id=g.farm_id,
+            owner=farm.owner,
+            galpao_id=g.id,
+            numero=Lote.next_numero(g.id),
+            inicio=date.fromisoformat(inicio_iso),
+            data=data,
+            created_by=getattr(ctx.user, "name", None) if ctx else None,
+        )
+        n_alarm = _toggle_iox_alarms(g.id, enable=True)
+        log.info("lote aberto via agente", galpao_id=g.id, numero=lote.numero, alarmes_iox=n_alarm)
         return {
-            "acao": f"{acao}_lote",
+            "acao": "lote_aberto",
             "granja": farm.name,
-            "galpao": galpao,
-            "requer_confirmacao": True,
-            "mensagem": f"Confirma {label} de lote em {farm.name}" + (f" - {galpao}" if galpao else "") + "?",
+            "galpao": g.nome,
+            "numero_lote": lote.numero,
+            "animais_alojados": data.get("animais_alojados"),
+            "genero": data.get("genero"),
+            "inicio": inicio_iso,
+            "alarmes_iox_habilitados": n_alarm,
         }
-
     except Exception as e:
-        log.error("Erro ao controlar lote", error=str(e))
+        log.exception("Erro ao abrir lote", error=str(e))
+        return {"erro": str(e)}
+
+
+@_require_write
+def fechar_lote(
+    granja: str = None,
+    galpao: str = None,
+    data_fim: str = None,
+    todos: bool = False,
+    confirmado: bool = False,
+) -> dict:
+    """Fecha o lote aberto de um galpão (ou de TODOS) e desliga os alarmes das IOX."""
+    from datetime import date
+
+    ctx = get_user_context()
+    denied = _lote_farm_denied(ctx)
+    if denied:
+        return denied
+    try:
+        farm, erro = _lote_resolver_farm(granja)
+        if erro:
+            return erro
+        galpoes, erro = _lote_galpoes(farm, galpao)
+        if erro:
+            return erro
+        abertos = [(g, Lote.get_open_by_galpao(g.id)) for g in galpoes]
+        abertos = [(g, lo) for g, lo in abertos if lo]
+        if not abertos:
+            return {"erro": f"Não há lote aberto em {farm.name} pra fechar."}
+        if len(abertos) > 1 and not todos:
+            return {
+                "requer_escolha": "galpao",
+                "galpoes": [g.nome for g, _ in abertos],
+                "opcao_todos": True,
+                "mensagem": (
+                    "Há lote aberto em mais de um galpão — pergunte qual fechar, "
+                    "oferecendo também a opção TODOS (fechar em massa)."
+                ),
+            }
+
+        fim_iso = _lote_dia_iso(data_fim)
+        alvo = [g for g, _ in abertos] if todos else [abertos[0][0]]
+        if not confirmado:
+            return {
+                "requer_confirmacao": True,
+                "granja": farm.name,
+                "galpoes": [g.nome for g in alvo],
+                "fim": fim_iso,
+                "mensagem": (
+                    f"Fechar o lote de {len(alvo)} galpão(ões) em {farm.name} "
+                    f"({', '.join(g.nome for g in alvo)}), encerramento "
+                    f"{date.fromisoformat(fim_iso).strftime('%d/%m/%Y')}. "
+                    "Os alarmes urgentes das IOX serão desabilitados."
+                ),
+            }
+
+        fechados, n_alarm = [], 0
+        for g in alvo:
+            lote = Lote.get_open_by_galpao(g.id)
+            if not lote:
+                continue
+            Lote.update_fields(lote.id, {"fim": date.fromisoformat(fim_iso)})
+            n_alarm += _toggle_iox_alarms(g.id, enable=False)
+            fechados.append({"galpao": g.nome, "numero_lote": lote.numero})
+            log.info("lote fechado via agente", lote_id=lote.id, fim=fim_iso)
+        return {
+            "acao": "lote_fechado",
+            "granja": farm.name,
+            "fechados": fechados,
+            "fim": fim_iso,
+            "alarmes_iox_desabilitados": n_alarm,
+        }
+    except Exception as e:
+        log.exception("Erro ao fechar lote", error=str(e))
+        return {"erro": str(e)}
+
+
+def _lote_aberto_unico(farm, galpao, finalidade):
+    """(galpao, lote, erro) — resolve o único lote aberto pro lançamento.
+    Vários galpões com lote aberto → requer_escolha; nenhum → orientação padrão."""
+    galpoes, erro = _lote_galpoes(farm, galpao)
+    if erro:
+        return None, None, erro
+    abertos = [(g, Lote.get_open_by_galpao(g.id)) for g in galpoes]
+    abertos = [(g, lo) for g, lo in abertos if lo]
+    if not abertos:
+        return None, None, _lote_aberto_ausente(galpoes, farm)
+    if len(abertos) > 1:
+        return None, None, {
+            "requer_escolha": "galpao",
+            "galpoes": [g.nome for g, _ in abertos],
+            "mensagem": f"Pergunte em qual galpão {finalidade}.",
+        }
+    return abertos[0][0], abertos[0][1], None
+
+
+@_require_write
+def informar_mortalidade(
+    granja: str = None,
+    galpao: str = None,
+    data: str = None,
+    natural: int = None,
+    locomotor: int = None,
+    refugo: int = None,
+    outros: int = None,
+    modo: str = None,
+) -> dict:
+    """Lança a mortalidade do dia no lote aberto (grava direto, sem confirmação)."""
+    from datetime import date
+
+    ctx = get_user_context()
+    denied = _lote_farm_denied(ctx)
+    if denied:
+        return denied
+    try:
+        quantidades = {"natural": natural, "locomotor": locomotor, "refugo": refugo, "outros": outros}
+        novos_base = []
+        for tipo in TIPOS_MORTE:
+            q = quantidades.get(tipo)
+            if q:
+                try:
+                    q = int(q)
+                except (TypeError, ValueError):
+                    continue
+                if q > 0:
+                    novos_base.append({"tipo": tipo, "quantidade": q})
+        if not novos_base:
+            return {
+                "erro": "Informe pelo menos um tipo de morte com quantidade "
+                "(natural, locomotor, refugo ou outros). Se o usuário não disse o tipo, pergunte."
+            }
+
+        farm, erro = _lote_resolver_farm(granja)
+        if erro:
+            return erro
+        g, lote, erro = _lote_aberto_unico(farm, galpao, "lançar a mortalidade")
+        if erro:
+            return erro
+
+        dia_iso = _lote_dia_iso(data)
+        ja_tinha = any(m.get("data") == dia_iso for m in (lote.data or {}).get("mortalidade") or [])
+        if ja_tinha and modo not in ("somar", "trocar"):
+            quando = date.fromisoformat(dia_iso).strftime("%d/%m/%Y")
+            return {
+                "requer_escolha": "modo",
+                "opcoes": ["somar", "trocar"],
+                "mensagem": (
+                    f"Já há lançamento de mortalidade em {quando} nesse lote. Pergunte "
+                    "(com botões) se é pra SOMAR ao que tem ou SUBSTITUIR o dia, e "
+                    "rechame com modo='somar' ou modo='trocar'."
+                ),
+            }
+
+        novos = [{"data": dia_iso, **n} for n in novos_base]
+        dados = dict(lote.data or {})
+        lista = list(dados.get("mortalidade") or [])
+        if modo == "trocar":
+            lista = [m for m in lista if m.get("data") != dia_iso]
+        lista.extend(novos)
+        dados["mortalidade"] = lista
+        Lote.update_fields(lote.id, {"data": dados})
+
+        total_dia = sum(int(m.get("quantidade") or 0) for m in lista if m.get("data") == dia_iso)
+        log.info("mortalidade registrada via agente", lote_id=lote.id, novos=novos)
+        return {
+            "acao": "mortalidade_substituida" if modo == "trocar" else "mortalidade_registrada",
+            "granja": farm.name,
+            "galpao": g.nome,
+            "numero_lote": lote.numero,
+            "data": dia_iso,
+            "registros": novos_base,
+            "total_do_dia": total_dia,
+        }
+    except Exception as e:
+        log.exception("Erro ao informar mortalidade", error=str(e))
+        return {"erro": str(e)}
+
+
+def _racao_habilitada(farm):
+    """True se a integradora da granja libera a ficha de ração recebida
+    (gate por dado: integradoras.racao_habilitada)."""
+    integ = Integradora.get_by_id(getattr(farm, "integradora_id", None))
+    return bool(integ and integ.racao_habilitada)
+
+
+@_require_write
+def registrar_racao(
+    peso_kg: float,
+    tipo_racao: str,
+    nota_fiscal: str,
+    granja: str = None,
+    galpao: str = None,
+    data: str = None,
+) -> dict:
+    """Registra uma entrega de ração no lote aberto (grava direto, sem confirmação)."""
+    import uuid
+    from datetime import date
+
+    ctx = get_user_context()
+    denied = _lote_farm_denied(ctx)
+    if denied:
+        return denied
+    try:
+        farm, erro = _lote_resolver_farm(granja)
+        if erro:
+            return erro
+        if not _racao_habilitada(farm):
+            return {
+                "erro": "O registro de ração recebida ainda não está disponível "
+                f"para a integradora da granja {farm.name}."
+            }
+        tipo = str(tipo_racao or "").upper()
+        if tipo not in TIPOS_RACAO:
+            return {
+                "erro": "Fase de ração inválida. As fases são: RAPI (pré-inicial), "
+                "RAI (inicial), RAC1/RAC2 (crescimento) e RAF (final/abate)."
+            }
+        try:
+            peso = float(peso_kg)
+        except (TypeError, ValueError):
+            peso = 0.0
+        if peso <= 0:
+            return {"erro": "Peso da ração inválido — pergunte o peso recebido em kg."}
+        nota = str(nota_fiscal or "").strip()
+        if not nota:
+            return {"erro": "Nota fiscal é obrigatória — pergunte o número da nota."}
+
+        g, lote, erro = _lote_aberto_unico(farm, galpao, "registrar a ração")
+        if erro:
+            return erro
+
+        dia_iso = _lote_dia_iso(data)
+        entrega = {
+            "id": str(uuid.uuid4()),
+            "data": dia_iso,
+            "nota_fiscal": nota,
+            "tipo": tipo,
+            "peso_kg": peso,
+        }
+        dados = dict(lote.data or {})
+        lista = list(dados.get("racao") or [])
+        lista.append(entrega)
+        dados["racao"] = lista
+        Lote.update_fields(lote.id, {"data": dados})
+
+        total = sum(float(r.get("peso_kg") or 0) for r in lista)
+        log.info("racao registrada via agente", lote_id=lote.id, entrega=entrega)
+        return {
+            "acao": "racao_registrada",
+            "granja": farm.name,
+            "galpao": g.nome,
+            "numero_lote": lote.numero,
+            "fase": tipo,
+            "peso_kg": peso,
+            "nota_fiscal": nota,
+            "data": dia_iso,
+            "total_recebido_no_lote_kg": total,
+        }
+    except Exception as e:
+        log.exception("Erro ao registrar ração", error=str(e))
+        return {"erro": str(e)}
+
+
+def _num_ccd(d, *keys):
+    """Extrai número de um dict tolerando vírgula decimal e str."""
+    if not isinstance(d, dict):
+        return None
+    for k in keys:
+        v = d.get(k)
+        if v in (None, ""):
+            continue
+        try:
+            return float(str(v).replace(",", "."))
+        except (TypeError, ValueError):
+            continue
+    return None
+
+
+def _lote_ppms_do_periodo(farm, lote, galpao=None):
+    """PpmReading do período do lote (inicio..fim/hoje), restrito aos pontos
+    relevantes: a ETA (água compartilhada) e o galpão do próprio lote."""
+    from datetime import date
+
+    try:
+        result = PpmReading.get_by_farm(farm.id, 1, 500)
+        itens = list(getattr(result, "items", []) or [])
+    except Exception as e:
+        log.warning("falha lendo ppm do lote", error=str(e))
+        return []
+    fim = lote.fim or date.today()
+    pontos_ok = {"ETA"}
+    if galpao is not None and getattr(galpao, "nome", None):
+        pontos_ok.add(galpao.nome)
+    dentro = [
+        r
+        for r in itens
+        if getattr(r, "created_at", None) and lote.inicio <= r.created_at.date() <= fim and r.local in pontos_ok
+    ]
+    dentro.sort(key=lambda x: x.created_at)
+    return dentro
+
+
+def _lote_ccd_snapshot(farm):
+    """Última leitura do CCD da granja: {orp, ph, temperature} ou None."""
+    try:
+        plates = Plate.get_all({"farm_id": farm.id, "plate_type": ["CCD"]}) or []
+        if not plates:
+            return None
+        plate = plates[0]
+        raw = EventCCD.get_latest_reading(plate.owner, plate.serial)
+        if not raw:
+            return None
+        return {
+            "orp": _num_ccd(raw, "ORP", "orp"),
+            "ph": _num_ccd(raw, "PH", "pH", "ph"),
+            "temperature": _num_ccd(raw, "Temperatura da Água", "Temperatura da água", "temperature"),
+        }
+    except Exception as e:
+        log.warning("falha no snapshot CCD do relatório de lote", error=str(e))
+        return None
+
+
+def relatorio_lote(granja: str = None, galpao: str = None, numero_lote: int = None) -> dict:
+    """Gera o PDF da ficha do lote (JBS/Seara) e envia como documento no WhatsApp."""
+    ctx = get_user_context()
+    denied = _lote_farm_denied(ctx)
+    if denied:
+        return denied
+    try:
+        farm, erro = _lote_resolver_farm(granja)
+        if erro:
+            return erro
+        galpoes, erro = _lote_galpoes(farm, galpao)
+        if erro:
+            return erro
+        if len(galpoes) > 1:
+            return {
+                "requer_escolha": "galpao",
+                "galpoes": [g.nome for g in galpoes],
+                "mensagem": f"Pergunte de qual galpão de {farm.name} é o relatório.",
+            }
+        g = galpoes[0]
+        lotes = Lote.get_by_galpao(g.id) or []
+        if not lotes:
+            return {"erro": f"Não há lotes registrados no galpão {g.nome}."}
+        if numero_lote is not None:
+            match = [lo for lo in lotes if lo.numero == int(numero_lote)]
+            if not match:
+                return {
+                    "erro": f"Não achei o lote nº {numero_lote} no galpão {g.nome}.",
+                    "lotes_existentes": [
+                        {"numero": lo.numero, "estado": "aberto" if lo.fim is None else "fechado"} for lo in lotes[:10]
+                    ],
+                }
+            lote = match[0]
+        elif len(lotes) > 1:
+            return {
+                "requer_escolha": "lote",
+                "lotes": [
+                    {"numero": lo.numero, "estado": "aberto" if lo.fim is None else "fechado"} for lo in lotes[:10]
+                ],
+                "mensagem": f"Pergunte qual lote do galpão {g.nome} (rechame com numero_lote).",
+            }
+        else:
+            lote = lotes[0]
+
+        ppms = _lote_ppms_do_periodo(farm, lote, g)
+        snapshot = _lote_ccd_snapshot(farm)
+        path = gerar_pdf_lote(lote, farm, g, ppms, snapshot=snapshot, racao_habilitada=_racao_habilitada(farm))
+
+        caption = f"📄 Relatório do lote nº {lote.numero} — {g.nome} ({farm.name})"
+        if ctx:
+            # Upload direto pra Meta (documento com dados do produtor — não
+            # hospedar em URL pública).
+            ctx.pending_messages.append({"type": "document_upload", "file_path": path, "msg": caption})
+        return {
+            "acao": "relatorio_enviado",
+            "granja": farm.name,
+            "galpao": g.nome,
+            "numero_lote": lote.numero,
+            "estado": "aberto" if lote.fim is None else "fechado",
+            "mensagem": "PDF do lote enviado ao usuário como documento. Apenas confirme o envio.",
+        }
+    except Exception as e:
+        log.exception("Erro ao gerar relatório de lote", error=str(e))
         return {"erro": str(e)}
 
 
@@ -3817,20 +4397,119 @@ TOOLS_Z1 = [
         parameters={"type": "object", "properties": {}, "required": []},
         function=consultar_quadros_com_problema,
     ),
-    # ===== LOTES =====
+    # ===== LOTES (avicultura) =====
     Tool(
-        name="controlar_lote",
-        description="Inicia ou finaliza um lote em uma granja/galpão.",
+        name="abrir_lote",
+        description=(
+            "Abre um lote avícola num galpão e HABILITA os alarmes urgentes das IOX do galpão. "
+            "Ficha opcional: nº de animais alojados, gênero (macho/femea/misto) e data de início "
+            "(default hoje) — se o usuário não informou nada da ficha, ofereça UMA vez informar ou "
+            "abrir sem. Fluxo: chame sem confirmado (retorna requer_confirmacao) → envie botões "
+            "Confirmar/Cancelar → só após o clique em Confirmar, rechame com confirmado=true. "
+            "Só contas de produtor (FARM)."
+        ),
         parameters={
             "type": "object",
             "properties": {
-                "granja": {"type": "string", "description": "Nome da granja"},
-                "acao": {"type": "string", "description": "iniciar ou finalizar"},
-                "galpao": {"type": "string", "description": "Nome do galpão (opcional)"},
+                "granja": {"type": "string", "description": "Nome da granja (omita se o usuário só tem uma)"},
+                "galpao": {"type": "string", "description": "Nome ou número do galpão como o usuário falou"},
+                "quantidade_animais": {"type": "integer", "description": "Animais alojados (ex: '50 mil' = 50000)"},
+                "genero": {"type": "string", "enum": ["macho", "femea", "misto"]},
+                "data_inicio": {"type": "string", "description": "Data de alojamento YYYY-MM-DD (default hoje)"},
+                "confirmado": {"type": "boolean", "description": "true SOMENTE após o usuário clicar Confirmar"},
             },
-            "required": ["granja", "acao"],
+            "required": [],
         },
-        function=controlar_lote,
+        function=abrir_lote,
+    ),
+    Tool(
+        name="fechar_lote",
+        description=(
+            "Fecha o lote aberto de um galpão (ou de TODOS os galpões com todos=true) e DESABILITA "
+            "os alarmes urgentes das IOX. Fluxo: chame sem confirmado (retorna requer_confirmacao) → "
+            "botões Confirmar/Cancelar → só após Confirmar, rechame com confirmado=true. Quando houver "
+            "lote aberto em vários galpões, a tool pede escolha — ofereça os galpões E a opção TODOS. "
+            "Só contas de produtor (FARM)."
+        ),
+        parameters={
+            "type": "object",
+            "properties": {
+                "granja": {"type": "string", "description": "Nome da granja (omita se o usuário só tem uma)"},
+                "galpao": {"type": "string", "description": "Nome ou número do galpão como o usuário falou"},
+                "data_fim": {"type": "string", "description": "Data de encerramento YYYY-MM-DD (default hoje)"},
+                "todos": {"type": "boolean", "description": "true para fechar os lotes de TODOS os galpões"},
+                "confirmado": {"type": "boolean", "description": "true SOMENTE após o usuário clicar Confirmar"},
+            },
+            "required": [],
+        },
+        function=fechar_lote,
+    ),
+    Tool(
+        name="informar_mortalidade",
+        description=(
+            "Lança a mortalidade do dia no lote ABERTO do galpão. Grava direto (sem confirmação). "
+            "Tipos: natural, locomotor, refugo, outros — informe SÓ os tipos que o usuário disse; se ele "
+            "não disse o tipo, pergunte (não chute). Se o dia já tem lançamento, a tool pede modo: "
+            "pergunte com botões Somar/Substituir e rechame com modo='somar' ou modo='trocar'. "
+            "Lote fechado não é editável por aqui (só sistema web). Só contas de produtor (FARM)."
+        ),
+        parameters={
+            "type": "object",
+            "properties": {
+                "granja": {"type": "string", "description": "Nome da granja (omita se o usuário só tem uma)"},
+                "galpao": {"type": "string", "description": "Nome ou número do galpão como o usuário falou"},
+                "data": {"type": "string", "description": "Dia do lançamento YYYY-MM-DD (default hoje)"},
+                "natural": {"type": "integer", "description": "Mortes por causa natural"},
+                "locomotor": {"type": "integer", "description": "Mortes por problema locomotor"},
+                "refugo": {"type": "integer", "description": "Refugo"},
+                "outros": {"type": "integer", "description": "Outras causas"},
+                "modo": {"type": "string", "enum": ["somar", "trocar"], "description": "Quando o dia já tem lançamento: somar ou trocar (substituir o dia)"},
+            },
+            "required": [],
+        },
+        function=informar_mortalidade,
+    ),
+    Tool(
+        name="registrar_racao",
+        description=(
+            "Registra uma ENTREGA de ração (nota fiscal) no lote aberto — vocabulário Seara. Grava "
+            "direto (sem confirmação). peso_kg em kg (converta toneladas: '18t' = 18000). Fase da dieta: "
+            "RAPI (pré-inicial), RAI (inicial), RAC1/RAC2 (crescimento), RAF (final/abate). Nota fiscal "
+            "obrigatória (só dígitos). Disponível apenas quando a integradora da granja habilita o "
+            "recurso. Só contas de produtor (FARM)."
+        ),
+        parameters={
+            "type": "object",
+            "properties": {
+                "peso_kg": {"type": "number", "description": "Peso recebido em kg"},
+                "tipo_racao": {"type": "string", "enum": ["RAPI", "RAI", "RAC1", "RAC2", "RAF"], "description": "Fase da dieta"},
+                "nota_fiscal": {"type": "string", "description": "Número da nota fiscal (só dígitos)"},
+                "granja": {"type": "string", "description": "Nome da granja (omita se o usuário só tem uma)"},
+                "galpao": {"type": "string", "description": "Nome ou número do galpão como o usuário falou"},
+                "data": {"type": "string", "description": "Data da entrega YYYY-MM-DD (default hoje)"},
+            },
+            "required": ["peso_kg", "tipo_racao", "nota_fiscal"],
+        },
+        function=registrar_racao,
+    ),
+    Tool(
+        name="relatorio_lote",
+        description=(
+            "Gera e ENVIA o PDF da ficha do lote (relatório JBS/Seara: mortalidade por semana de vida, "
+            "ração recebida, PPM de cloro do período e água da ETA) direto no WhatsApp do usuário. "
+            "Funciona pra lote aberto ou fechado. Se o galpão tem vários lotes, a tool lista e você "
+            "pergunta qual (rechame com numero_lote). Só contas de produtor (FARM)."
+        ),
+        parameters={
+            "type": "object",
+            "properties": {
+                "granja": {"type": "string", "description": "Nome da granja (omita se o usuário só tem uma)"},
+                "galpao": {"type": "string", "description": "Nome ou número do galpão como o usuário falou"},
+                "numero_lote": {"type": "integer", "description": "Número do lote (quando o usuário especificar ou após escolha)"},
+            },
+            "required": [],
+        },
+        function=relatorio_lote,
     ),
     # ===== REGISTRO DE VISITA =====
     Tool(

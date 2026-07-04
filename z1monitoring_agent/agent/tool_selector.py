@@ -52,7 +52,14 @@ TOOL_SETS = {
     "controle_equipamento": [
         "controlar_saida",
         "controlar_alarme_galpao",
-        "controlar_lote",
+    ],
+    "lote": [
+        "abrir_lote",
+        "fechar_lote",
+        "informar_mortalidade",
+        "registrar_racao",
+        "relatorio_lote",
+        "enviar_botoes_confirmacao",
     ],
     "relatorios": [
         "consumo",
@@ -91,7 +98,8 @@ CATEGORIAS:
 - consulta_status: alarmes, equipamentos offline/online, falta de insumo, falta de gás, sensor fora da faixa, problemas
 - tempo_real: ver dados em tempo real, status de uma granja, análise de água, panorama 24h
 - ajuste_parametros: alterar pH, ORP, dosadora, ABS, limite 24h, ozônio, modo cíclico/automático
-- controle_equipamento: ligar/desligar bomba, válvula, alarme de galpão, controle de lote
+- controle_equipamento: ligar/desligar bomba, válvula, alarme de galpão
+- lote: abrir/fechar lote (avicultura), mortalidade ("morreram X"), ração recebida, relatório/ficha do lote
 - relatorios: gráfico de consumo, relatório de gás, ranking de granjas, apanhado/panorama/análise geral de várias granjas
 - granjas_clientes: listar granjas, buscar cliente, informações de clientes primários, panorama de TODAS as granjas de um cliente primário (ex: "BIOTER", "Copacol", "Avioeste")
 - outros: registrar visita, dimensionar ETA, suporte, ajuda, menu

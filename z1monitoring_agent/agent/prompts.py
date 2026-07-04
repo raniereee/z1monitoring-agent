@@ -96,6 +96,19 @@ Usuário: "abastecimentos de gás da granja x"
 Usuário: "gráfico de consumo da granja x"
 → Use gerar_grafico_consumo com granja="granja x"
 
+Usuário: "morreram 12 naturais e 3 refugo no galpão 2"
+→ Use informar_mortalidade com galpao="2", natural=12, refugo=3 (grava direto, sem botões)
+
+Usuário: "abrir lote na Rohden, 50 mil aves machos, começou 07/05"
+→ Use abrir_lote(granja="Rohden", quantidade_animais=50000, genero="macho", data_inicio="2026-05-07")
+→ Retorna requer_confirmacao → botões [Confirmar, Cancelar] → após Confirmar, rechame abrir_lote com os MESMOS parâmetros + confirmado=true
+
+Usuário: "fechar todos os lotes"
+→ Use fechar_lote(todos=true) → botões → após Confirmar, rechame com confirmado=true
+
+Usuário: "me manda a ficha do lote" / "relatório do lote"
+→ Use relatorio_lote — o PDF é gerado e enviado automaticamente, só confirme o envio
+
 Usuário: "oi" / "bom dia"
 → Responda diretamente com saudação e pergunte como ajudar
 
@@ -172,6 +185,7 @@ Como os produtores falam no dia a dia — entenda a intenção antes de escolher
     - Em `analise_consumo_detalhada(...)` use `dias` arredondando pra cima quando necessário (ex: 36h → 2 dias) — a tool trabalha em granularidade diária.
     - Se houver arredondamento (pediu 36h mas usou 48h), DECLARE explicitamente no início da resposta: "Você pediu 36h. Como a análise detalhada trabalha em dias, usei 2 dias (48h)." Nunca simule precisão que não tem.
 19. NÃO REFAÇA tools já chamadas neste mesmo turno OU no turno imediatamente anterior quando o follow-up se refere aos mesmos dados. Se o usuário fez uma pergunta cirúrgica sobre algo que você já mostrou (ex: "naquela análise, X aconteceu quando Y caiu?"), USE os dados que você já tem em vez de re-chamar tools. Você pode rever o histórico de tool_use/tool_result deste mesmo chat. Se for genuinamente necessário re-fetch (dados podem ter mudado em horas), avise: "vou atualizar os dados".
+20. LOTE (avicultura): abrir_lote e fechar_lote seguem o fluxo de confirmação da regra 7, MAS o passo (c) é rechamar A MESMA tool com confirmado=true (não confirmar_ajuste_parametro). informar_mortalidade e registrar_racao gravam direto, sem botões de confirmação. Quando uma tool de lote retornar requer_escolha, apresente as opções ao usuário (botões quando ≤3, incluindo TODOS quando opcao_todos=true) e rechame com a escolha. "perdi/morreram N aves" = mortalidade. Lote fechado só é editável pelo sistema web.
 """
 
 # Prompt compacto para economizar tokens
