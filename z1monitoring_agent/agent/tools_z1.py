@@ -918,14 +918,18 @@ def listar_granjas_cliente_primario(nome_cliente: str, tipo_equipamento: str = N
                 "mensagem": "Nenhum cliente secundário associado a este cliente primário",
             }
 
-        # 3. Pega os identifications dos clientes secundários
-        identificacoes = [cs.identification for cs in clientes_secundarios]
+        # 3. Pega os identifications dos clientes secundários (sem repetidos)
+        identificacoes = list(dict.fromkeys(cs.identification for cs in clientes_secundarios))
 
         # 4. Busca granjas de todos esses clientes secundários
         granjas_encontradas = []
+        granjas_vistas = set()
         for identificacao in identificacoes:
             farms = Farm.get_all_farms_objs_filtereds({"owner": identificacao})
             for farm in farms:
+                if farm.name in granjas_vistas:
+                    continue
+
                 # Filtra por tipo de equipamento se especificado
                 if tipo_equipamento:
                     plates = Plate.get_all({"farm_associated": farm.name})
@@ -943,6 +947,7 @@ def listar_granjas_cliente_primario(nome_cliente: str, tipo_equipamento: str = N
                     if not tem_tipo:
                         continue
 
+                granjas_vistas.add(farm.name)
                 granjas_encontradas.append({
                     "nome": farm.name,
                     "cliente_secundario": identificacao,
