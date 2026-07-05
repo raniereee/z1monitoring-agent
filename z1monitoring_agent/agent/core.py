@@ -292,11 +292,14 @@ class Agent:
 
     @staticmethod
     def _tool_cache_key(tool_name: str, tool_input: dict) -> str:
+        # Prefixo de versão: entries legados persistidos no chat.context
+        # (gravados ANTES do gate de _no_cache/cacheable) nunca mais dão
+        # match — bump a versão sempre que a semântica do cache mudar.
         try:
             args = json.dumps(tool_input or {}, sort_keys=True, ensure_ascii=False)
         except Exception:
             args = str(tool_input)
-        return f"{tool_name}::{args}"
+        return f"v2::{tool_name}::{args}"
 
     def _tool_cache_get(self, key: str):
         entry = self.tool_cache.get(key)
@@ -306,7 +309,13 @@ class Agent:
         if (time.time() - ts) > self.tool_cache_ttl:
             self.tool_cache.pop(key, None)
             return None
-        return entry.get("result")
+        result = entry.get("result")
+        # Defesa: resultado marcado _no_cache nunca é servido do cache
+        # (não deveria ter sido gravado, mas entries podem vir do banco).
+        if isinstance(result, dict) and result.get("_no_cache"):
+            self.tool_cache.pop(key, None)
+            return None
+        return result
 
     def _tool_cache_put(self, key: str, result, tool_name: str):
         if tool_name in self._TOOL_CACHE_BYPASS:
