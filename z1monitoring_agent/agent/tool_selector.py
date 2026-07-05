@@ -17,6 +17,7 @@ client = Anthropic(api_key=os.getenv("ANTHROPIC_API_KEY"))
 CORE_TOOLS = [
     "buscar_granja",
     "enviar_opcoes",  # desambiguação é transversal (granja/galpão/lote em qualquer categoria)
+    "enviar_botoes_confirmacao",  # perguntas sim/não são transversais (oferta de suporte etc.)
     "mostrar_menu_principal",
     "mostrar_ajuda",
     "suporte",

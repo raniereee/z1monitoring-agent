@@ -1676,11 +1676,41 @@ def suporte(acao: str = "solicitar", tipo_equipamento: str = None, topico: str =
         Resultado da ação de suporte
     """
     if acao == "solicitar":
+        # NÃO existe "abertura de chamado" em sistema nenhum: o suporte real é
+        # o cartão de contato (DrÁgua) + link wa.me pré-preenchido — mesma
+        # mecânica do fastpath solicitar_suporte_eta do prisma_api.
+        from urllib.parse import quote
+
+        ctx = get_user_context()
+        partes = []
+        if tipo_equipamento:
+            partes.append(f"equipamento {tipo_equipamento}")
+        if problema:
+            partes.append(problema)
+        texto = "Preciso de suporte" + (": " + "; ".join(partes) if partes else " com minha ETA")
+        wa_link = f"https://wa.me/554888331991?text={quote(texto)}"
+        if ctx:
+            ctx.pending_messages.append({
+                "type": "contacts",
+                "contacts": [
+                    {
+                        "name": {"formatted_name": "DrÁgua", "first_name": "DrÁgua"},
+                        "phones": [{"phone": "554888331991", "wa_id": "554888331991", "type": "CELL"}],
+                        "org": {"company": "Z1 Monitoramento"},
+                    }
+                ],
+            })
         return {
-            "acao": "iniciar_suporte",
+            "acao": "contato_suporte_enviado",
             "equipamento": tipo_equipamento,
             "problema": problema,
-            "mensagem": "Iniciando atendimento de suporte técnico",
+            "link_whatsapp": wa_link,
+            "mensagem": (
+                "Cartão do suporte técnico enviado ao usuário. NÃO EXISTE abertura de "
+                "chamado automática — NUNCA diga 'chamado aberto' ou 'entrarão em "
+                "contato'. Diga em 1 linha que o contato do suporte foi enviado e "
+                "inclua o link (a mensagem já vai pré-preenchida com o problema)."
+            ),
         }
 
     if acao == "listar_topicos":
