@@ -324,6 +324,23 @@ _PLATE_TYPE_CATEGORIA = {
 }
 
 
+def _faixas_configuradas(plates):
+    """Faixas de pH/ORP CONFIGURADAS na CCD/Z1 da granja (definidas pelo
+    técnico responsável). Leituras só podem ser julgadas contra ESSA faixa —
+    cada granja tem a sua (pH 4,2 pode ser normal numa granja com faixa 4-5)."""
+    for p in plates or []:
+        if p.plate_type in ("CCD", "Z1"):
+            params = p.params or {}
+            faixas = {}
+            if params.get("ph_inf") is not None and params.get("ph_sup") is not None:
+                faixas["ph"] = [params.get("ph_inf"), params.get("ph_sup")]
+            if params.get("orp_inf") is not None and params.get("orp_sup") is not None:
+                faixas["orp"] = [params.get("orp_inf"), params.get("orp_sup")]
+            if faixas:
+                return faixas
+    return {}
+
+
 def _plates_by_serials(serials):
     """Busca placas por lista de seriais. Retorna dict {serial: plate}."""
     result = {}
@@ -710,7 +727,11 @@ def tempo_real(granja: str, sensor: str = "geral") -> dict:
             if not plates:
                 return {"erro": f"Nenhum equipamento encontrado em '{farm.name}'"}
             resultado = commons_actions.handler_tempo_real_geral(farm, plates)
-            return {"granja": farm.name, "mensagem": resultado}
+            return {
+                "granja": farm.name,
+                "mensagem": resultado,
+                "faixas_configuradas": _faixas_configuradas(plates),
+            }
 
         if sensor == "gas":
             from z1monitoring_agent.utils import commons_actions
@@ -761,7 +782,12 @@ def tempo_real(granja: str, sensor: str = "geral") -> dict:
 
             leituras.append(info)
 
-        return {"granja": farm.name, "sensor": sensor, "leituras": leituras}
+        result = {"granja": farm.name, "sensor": sensor, "leituras": leituras}
+        if sensor in ("ph", "orp", "geral"):
+            fx = _faixas_configuradas(Plate.get_all({"farm_associated": farm.name, "plate_type": ["CCD", "Z1"]}))
+            if fx:
+                result["faixas_configuradas"] = fx
+        return result
 
     except Exception as e:
         log.error("Erro ao consultar tempo real", error=str(e))
@@ -811,6 +837,11 @@ def analise(granja: str, tipo: str = "agua", horas: int = 24) -> dict:
 
         result = {"granja": farm.name, "ph": None, "orp": None, "temperatura": None, "status_geral": "ok", "alertas": []}
 
+        # Faixa configurada pelo técnico (params da CCD/Z1) — SEM default
+        # genérico: julgar pH 4,2 contra 6,5-7,5 numa granja configurada
+        # pra 4-5 gera alerta falso. Sem faixa conhecida, não se julga.
+        fx = _faixas_configuradas(plates)
+
         for plate in plates:
             sv = plate.sensors_value
             if not sv:
@@ -819,24 +850,32 @@ def analise(granja: str, tipo: str = "agua", horas: int = 24) -> dict:
             if result["ph"] is None:
                 ph = sv.get("ph") or sv.get("PH")
                 if ph is not None:
-                    ph_min = sv.get("ph_min") or sv.get("pH Alvo Inferior", 6.5)
-                    ph_max = sv.get("ph_max") or sv.get("pH Alvo Superior", 7.5)
-                    na_faixa = float(ph_min) <= float(ph) <= float(ph_max)
-                    result["ph"] = {"valor": ph, "minimo": ph_min, "maximo": ph_max, "na_faixa": na_faixa}
-                    if not na_faixa:
-                        result["alertas"].append(f"pH fora da faixa: {ph}")
-                        result["status_geral"] = "alerta"
+                    ph_min = sv.get("ph_min") or sv.get("pH Alvo Inferior") or (fx.get("ph") or [None, None])[0]
+                    ph_max = sv.get("ph_max") or sv.get("pH Alvo Superior") or (fx.get("ph") or [None, None])[1]
+                    if ph_min is not None and ph_max is not None:
+                        na_faixa = float(ph_min) <= float(ph) <= float(ph_max)
+                        result["ph"] = {"valor": ph, "minimo": ph_min, "maximo": ph_max, "na_faixa": na_faixa}
+                        if not na_faixa:
+                            result["alertas"].append(f"pH fora da faixa configurada ({ph_min}-{ph_max}): {ph}")
+                            result["status_geral"] = "alerta"
+                    else:
+                        result["ph"] = {"valor": ph, "minimo": None, "maximo": None, "na_faixa": None,
+                                        "obs": "faixa configurada indisponível — não classificar"}
 
             if result["orp"] is None:
                 orp = sv.get("orp") or sv.get("ORP")
                 if orp is not None:
-                    orp_min = sv.get("orp_min") or sv.get("ORP Alvo Inferior", 650)
-                    orp_max = sv.get("orp_max") or sv.get("ORP Alvo Superior", 750)
-                    na_faixa = float(orp_min) <= float(orp) <= float(orp_max)
-                    result["orp"] = {"valor": orp, "minimo": orp_min, "maximo": orp_max, "na_faixa": na_faixa}
-                    if not na_faixa:
-                        result["alertas"].append(f"ORP fora da faixa: {orp}")
-                        result["status_geral"] = "alerta"
+                    orp_min = sv.get("orp_min") or sv.get("ORP Alvo Inferior") or (fx.get("orp") or [None, None])[0]
+                    orp_max = sv.get("orp_max") or sv.get("ORP Alvo Superior") or (fx.get("orp") or [None, None])[1]
+                    if orp_min is not None and orp_max is not None:
+                        na_faixa = float(orp_min) <= float(orp) <= float(orp_max)
+                        result["orp"] = {"valor": orp, "minimo": orp_min, "maximo": orp_max, "na_faixa": na_faixa}
+                        if not na_faixa:
+                            result["alertas"].append(f"ORP fora da faixa configurada ({orp_min}-{orp_max}): {orp}")
+                            result["status_geral"] = "alerta"
+                    else:
+                        result["orp"] = {"valor": orp, "minimo": None, "maximo": None, "na_faixa": None,
+                                        "obs": "faixa configurada indisponível — não classificar"}
 
             if result["temperatura"] is None:
                 temp = sv.get("temperature") or sv.get("Temperatura da Água")
@@ -2427,6 +2466,10 @@ def panorama_24h(granja: str = None, cliente_primario: str = None) -> dict:
                     temp = sv.get("temperature") or sv.get("Temperatura da Água")
                     if temp is not None:
                         farm_data["temperatura"] = temp
+
+            fx = _faixas_configuradas(plates)
+            if fx:
+                farm_data["faixas_configuradas"] = fx
 
             has_ccd = any(p.plate_type == "CCD" for p in plates)
             has_z1 = any(p.plate_type == "Z1" for p in plates)
