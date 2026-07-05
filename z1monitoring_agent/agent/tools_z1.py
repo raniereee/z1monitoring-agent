@@ -241,16 +241,52 @@ def _farm_names_in_scope(ctx):
     return [n for n in (_get_allowed_farm_names(ctx) or []) if n]
 
 
+def _farms_com_aliases(ctx):
+    """[(nome_da_granja, [nomes do DONO])] no ESCOPO do usuário.
+
+    O usuário fala tanto o nome da granja quanto o do dono (cliente
+    secundário): 'gráfico da granja losso' = granja do MARCOS LOSS. Mesmo
+    desenho do _resolve_local/_get_user_secondary_data do guiado (name +
+    fantasy_name como aliases; admin vê todos, resto por associateds_allowed).
+    Dono com VÁRIAS granjas: cada uma carrega o alias → scores empatam →
+    sem auto-resolve → o agente apresenta as granjas via enviar_opcoes
+    (equivalente ao 'qual dos locais do cliente?' do guiado)."""
+    from z1monitoring_models.models.clients_secondary import ClientSecondary
+
+    if not ctx or ctx.is_admin:
+        farms = Farm.get_all_farms_objs_filtereds({}) or []
+    elif ctx.permission_name in _PRIMARY_PERM_NAMES:
+        farms = Farm.get_all_that_associated_allowed_permitted(ctx.associated) or []
+    else:
+        farms = Farm.get_all_farms_objs_filtereds({"owner": ctx.associated}) or []
+
+    aliases_por_ident = {}
+    try:
+        filter_cs = {} if (not ctx or ctx.is_admin) else {"associateds_allowed": ctx.associated}
+        for s in ClientSecondary.get_all(filter_cs) or []:
+            nomes = [n for n in (getattr(s, "name", None), getattr(s, "fantasy_name", None)) if n]
+            if nomes:
+                aliases_por_ident[s.identification] = nomes
+    except Exception as e:
+        log.warning("aliases de dono indisponíveis", error=str(e))
+
+    return [
+        (f.name, aliases_por_ident.get(getattr(f, "owner", None), []))
+        for f in farms
+        if f.name
+    ]
+
+
 def _farm_similares(nome, top_n=15):
-    """Top-N granjas do ESCOPO por similaridade léxica (farm_resolver)."""
-    return farm_resolver.top_similares(nome, _farm_names_in_scope(get_user_context()), top_n=top_n)
+    """Top-N granjas do ESCOPO por similaridade (nome da granja OU do dono)."""
+    return farm_resolver.top_similares_aliased(nome, _farms_com_aliases(get_user_context()), top_n=top_n)
 
 
 def _fuzzy_farm_in_scope(nome):
     """Fallback fuzzy DENTRO do escopo do usuário quando a busca do banco
-    falha (ex: 'bak' → 'Granja Back'). Auto-resolve só em match inequívoco
-    (thresholds no farm_resolver); sempre passa pelo enforce."""
-    best = farm_resolver.best_match(nome, _farm_names_in_scope(get_user_context()))
+    falha ('bak' → 'Granja Back'; 'losso' → granja do dono MARCOS LOSS via
+    alias). Auto-resolve só em match inequívoco; sempre passa pelo enforce."""
+    best = farm_resolver.best_match_aliased(nome, _farms_com_aliases(get_user_context()))
     if not best:
         return None
     farm = Farm.load(best)
@@ -1122,22 +1158,26 @@ def buscar_granja(nome: str) -> dict:
             # Tenta fuzzy match
             farm = _resolve_farm_acl(nome)
             if not farm:
-                # Sem match direto: devolve as mais parecidas do ESCOPO pro
-                # agente escolher foneticamente (nome vem do áudio com grafia
-                # divergente: Back≈Bak, Wassmuth≈Vasmute, Kolling≈Colin).
-                similares = [n for _, n in _farm_similares(nome, top_n=15)]
+                # Sem match direto: devolve as mais parecidas do ESCOPO (com o
+                # DONO de cada uma) pro agente escolher foneticamente — o
+                # usuário fala tanto o nome da granja quanto o do dono.
+                aliases = dict(_farms_com_aliases(get_user_context()))
+                similares = [
+                    {"granja": n, "dono": (aliases.get(n) or [None])[0]}
+                    for _, n in _farm_similares(nome, top_n=15)
+                ]
                 return {
                     "encontrada": False,
                     "similares": similares,
                     "mensagem": (
                         f"Nenhum match direto para '{nome}'. Compare PELO SOM com a lista "
-                        "'similares', pelo NÚCLEO/sobrenome do nome (o produtor fala o "
-                        "sobrenome: 'kolling' = 'PEDRO KOLLING'). Grafias equivalentes: "
-                        "W≈V, K≈C/QU, CK≈K, SCH≈X, SS≈S, vogal final varia (Wolf≈Wolfe). "
-                        "A consoante INICIAL do núcleo não muda fora dessas classes — "
-                        "Bello NÃO é Mello. Um único candidato compatível pelo som → use-o "
-                        "direto; mais de um plausível → apresente-os com enviar_opcoes; "
-                        "nenhum → diga que não achou."
+                        "'similares' — tanto o nome da granja quanto o do DONO (o usuário "
+                        "fala o sobrenome do dono: 'granja do kolling' = granja cujo dono é "
+                        "PEDRO KOLLING). Grafias equivalentes: W≈V, K≈C/QU, CK≈K, SCH≈X, "
+                        "SS≈S, vogal final varia (Wolf≈Wolfe). A consoante INICIAL do núcleo "
+                        "não muda fora dessas classes — Bello NÃO é Mello. Um único candidato "
+                        "compatível pelo som → use a granja direto; mais de um plausível → "
+                        "enviar_opcoes com os NOMES DAS GRANJAS; nenhum → diga que não achou."
                     ),
                 }
             candidates = [farm.name]
@@ -5219,8 +5259,9 @@ TOOLS_Z1 = [
             "Apresenta opções CLICÁVEIS ao usuário (até 3 = botões; 4-10 = lista interativa). Use "
             "SEMPRE que o usuário precisar escolher entre alternativas — granjas parecidas, galpões, "
             "lotes, requer_escolha de qualquer tool. NUNCA peça pra digitar o nome: o clique volta "
-            "com o texto exato e evita novo erro de grafia. Para confirmação sim/não use "
-            "enviar_botoes_confirmacao."
+            "com o texto exato e evita novo erro de grafia. A pergunta vai no parâmetro 'mensagem' "
+            "— após chamar esta tool, encerre a resposta VAZIA (sem 'escolha abaixo'). Para "
+            "confirmação sim/não use enviar_botoes_confirmacao."
         ),
         parameters={
             "type": "object",

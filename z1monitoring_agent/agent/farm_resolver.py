@@ -86,26 +86,66 @@ def _initial_compatible(raw_norm: str, candidate: str) -> bool:
     return any(_initial_class(tok) == alvo for tok in nb.split())
 
 
-def top_similares(raw: str, names: list, top_n: int = 15) -> list:
-    """Top-N nomes por similaridade com `raw`. Retorna [(score, name)] desc."""
+def _score_item(raw: str, name: str, aliases: list) -> tuple:
+    """(melhor_score, texto_que_deu_o_score) entre o nome e seus aliases.
+
+    Alias típico: o nome do DONO da granja — o produtor fala tanto o nome da
+    granja quanto o do dono ('granja do losso' = granja do MARCOS LOSS),
+    igual ao resolve_local do guiado que considera farms + secondaries."""
+    best_s, best_t = calculate_similarity(raw, name), name
+    for a in aliases or []:
+        s = calculate_similarity(raw, a)
+        if s > best_s:
+            best_s, best_t = s, a
+    return best_s, best_t
+
+
+def top_similares_aliased(raw: str, items: list, top_n: int = 15) -> list:
+    """items: [(name, [aliases])]. Retorna [(score, name)] desc, com o score
+    considerando nome e aliases."""
     if not raw:
         return []
-    scored = sorted(((calculate_similarity(raw, n), n) for n in names if n), reverse=True)
+    scored = []
+    for name, aliases in items:
+        if not name:
+            continue
+        s, _ = _score_item(raw, name, aliases)
+        scored.append((s, name))
+    scored.sort(reverse=True)
     return scored[:top_n]
+
+
+def best_match_aliased(raw: str, items: list) -> str:
+    """Nome único quando o match é forte, inequívoco E com inicial compatível
+    com o TEXTO que pontuou (nome ou alias); senão None."""
+    if not raw:
+        return None
+    scored = []
+    for name, aliases in items:
+        if not name:
+            continue
+        s, matched = _score_item(raw, name, aliases)
+        scored.append((s, matched, name))
+    scored.sort(reverse=True)
+    if not scored:
+        return None
+    best_score, best_matched, best_name = scored[0]
+    second_score = scored[1][0] if len(scored) > 1 else 0.0
+    if (
+        best_score >= AUTO_RESOLVE_MIN_RATIO
+        and (best_score - second_score) >= AUTO_RESOLVE_MIN_GAP
+        and _initial_compatible(normalize_no_prefix(raw), best_matched)
+    ):
+        return best_name
+    return None
+
+
+def top_similares(raw: str, names: list, top_n: int = 15) -> list:
+    """Top-N nomes por similaridade com `raw`. Retorna [(score, name)] desc."""
+    return top_similares_aliased(raw, [(n, []) for n in names], top_n=top_n)
 
 
 def best_match(raw: str, names: list) -> str:
     """Nome único quando o match é forte, inequívoco E com inicial
     compatível; senão None (vai pro fluxo de desambiguação/LLM)."""
-    scored = top_similares(raw, names, top_n=2)
-    if not scored:
-        return None
-    best_score, best_name = scored[0]
-    second_score = scored[1][0] if len(scored) > 1 else 0.0
-    if (
-        best_score >= AUTO_RESOLVE_MIN_RATIO
-        and (best_score - second_score) >= AUTO_RESOLVE_MIN_GAP
-        and _initial_compatible(normalize_no_prefix(raw), best_name)
-    ):
-        return best_name
-    return None
+    return best_match_aliased(raw, [(n, []) for n in names])
