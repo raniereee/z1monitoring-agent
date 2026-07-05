@@ -1131,9 +1131,12 @@ def buscar_granja(nome: str) -> dict:
                     "similares": similares,
                     "mensagem": (
                         f"Nenhum match direto para '{nome}'. Compare PELO SOM com a lista "
-                        "'similares' (sotaque alemão/polonês: W≈V, K≈C/QU, CK≈K, SCH≈X) e "
-                        "use o nome exato correspondente; se houver mais de um candidato "
-                        "plausível ou nenhum, pergunte ao usuário."
+                        "'similares', pelo NÚCLEO/sobrenome do nome (o produtor fala o "
+                        "sobrenome: 'losso' = 'MARCOS LOSS'). Grafias equivalentes: W≈V, "
+                        "K≈C/QU, CK≈K, SCH≈X, SS≈S, vogal final varia (Loss≈Losso). "
+                        "A consoante INICIAL do núcleo não muda fora dessas classes — "
+                        "Basso NÃO é Losso. Um único candidato compatível pelo som → use-o "
+                        "direto; mais de um plausível ou nenhum → pergunte ao usuário."
                     ),
                 }
             candidates = [farm.name]

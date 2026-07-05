@@ -51,8 +51,39 @@ def calculate_similarity(a: str, b: str) -> float:
 
     O SIMILARITY (pg_trgm) do banco compara o pedido com o nome COM prefixo
     ('bak' vs 'Granja Back' fica abaixo do threshold) — aqui os dois lados
-    são normalizados sem prefixo ('bak' vs 'back' = 0.86)."""
-    return SequenceMatcher(None, normalize_no_prefix(a), normalize_no_prefix(b)).ratio()
+    são normalizados sem prefixo ('bak' vs 'back' = 0.86).
+
+    Além do nome completo, compara com cada TOKEN (>=3 chars) do candidato:
+    o produtor fala o sobrenome/núcleo ('losso' → 'MARCOS LOSS' via token
+    'loss' = 0.89), e o nome completo dilui o match (0.5)."""
+    na = normalize_no_prefix(a)
+    nb = normalize_no_prefix(b)
+    best = SequenceMatcher(None, na, nb).ratio()
+    for tok in nb.split():
+        if len(tok) >= 3:
+            best = max(best, SequenceMatcher(None, na, tok).ratio())
+    return best
+
+
+# Iniciais foneticamente equivalentes na grafia alemã/polonesa local
+# (Wassmuth≈Vasmute, Kolling≈Colin). Fora dessas classes, consoante inicial
+# DIFERENTE = nome diferente (Basso não é Losso), por mais alto que seja o
+# ratio do resto.
+_INITIAL_EQUIV = {"w": "v", "k": "c", "q": "c", "z": "s"}
+
+
+def _initial_class(s: str) -> str:
+    c = (s or "")[:1]
+    return _INITIAL_EQUIV.get(c, c)
+
+
+def _initial_compatible(raw_norm: str, candidate: str) -> bool:
+    """True se a inicial do pedido bate com a do nome ou de algum token dele."""
+    alvo = _initial_class(raw_norm)
+    nb = normalize_no_prefix(candidate)
+    if _initial_class(nb) == alvo:
+        return True
+    return any(_initial_class(tok) == alvo for tok in nb.split())
 
 
 def top_similares(raw: str, names: list, top_n: int = 15) -> list:
@@ -64,12 +95,17 @@ def top_similares(raw: str, names: list, top_n: int = 15) -> list:
 
 
 def best_match(raw: str, names: list) -> str:
-    """Nome único quando o match é forte e inequívoco; senão None."""
+    """Nome único quando o match é forte, inequívoco E com inicial
+    compatível; senão None (vai pro fluxo de desambiguação/LLM)."""
     scored = top_similares(raw, names, top_n=2)
     if not scored:
         return None
     best_score, best_name = scored[0]
     second_score = scored[1][0] if len(scored) > 1 else 0.0
-    if best_score >= AUTO_RESOLVE_MIN_RATIO and (best_score - second_score) >= AUTO_RESOLVE_MIN_GAP:
+    if (
+        best_score >= AUTO_RESOLVE_MIN_RATIO
+        and (best_score - second_score) >= AUTO_RESOLVE_MIN_GAP
+        and _initial_compatible(normalize_no_prefix(raw), best_name)
+    ):
         return best_name
     return None
