@@ -1787,7 +1787,7 @@ def consumo(granja: str, dias: int = 7, formato: str = "dados") -> dict:
                 "granja": farm.name,
                 "dias": dias,
                 "graficos_gerados": qtd,
-                "mensagem": f"{qtd} gráfico(s) de consumo gerado(s) para {farm.name} ({dias} dias). As imagens serão enviadas ao usuário.",
+                "mensagem": f"{qtd} gráfico(s) enviados ao usuário com legenda própria ({farm.name}, {dias} dias). ENCERRE A RESPOSTA VAZIA — texto extra vira mensagem redundante.",
             }
         except Exception as e:
             log.error("Erro ao gerar gráfico", error=str(e))
@@ -3142,7 +3142,7 @@ def relatorio_lote(granja: str = None, galpao: str = None, numero_lote: int = No
             "galpao": g.nome,
             "numero_lote": lote.numero,
             "estado": "aberto" if lote.fim is None else "fechado",
-            "mensagem": "PDF do lote enviado ao usuário como documento. Apenas confirme o envio.",
+            "mensagem": "PDF do lote enviado ao usuário como documento com legenda. ENCERRE A RESPOSTA VAZIA — texto extra vira mensagem redundante.",
         }
     except Exception as e:
         log.exception("Erro ao gerar relatório de lote", error=str(e))
@@ -3540,8 +3540,8 @@ def info_z1(topico: str, cidade: str = None, bairro: str = None) -> dict:
                 })
             return {
                 "acao": "manual_enviado",
-                "mensagem": "PDF do Manual de Monitoramento de Gás enviado como documento. "
-                f"Mencione também a plataforma: {_PLATAFORMA_URL}",
+                "mensagem": "PDF do manual enviado como documento com legenda. Responda em UMA linha "
+                f"curta citando a plataforma {_PLATAFORMA_URL} — nada mais.",
             }
 
         if t == "link_plataforma":
@@ -4929,7 +4929,7 @@ TOOLS_Z1 = [
     # ===== DADOS E RELATÓRIOS =====
     Tool(
         name="consumo",
-        description="Consulta consumo de ácido, cloro e água de uma granja. Formato 'dados' retorna números por dia. Formato 'grafico' gera as imagens e as envia DIRETAMENTE ao usuário — apenas confirme o envio, sem descrever os gráficos.",
+        description="Consulta consumo de ácido, cloro e água de uma granja. Formato 'dados' retorna números por dia. Formato 'grafico' gera as imagens e as envia DIRETAMENTE ao usuário com legenda — depois encerre a resposta VAZIA, sem descrever nem anunciar os gráficos.",
         parameters={
             "type": "object",
             "properties": {
