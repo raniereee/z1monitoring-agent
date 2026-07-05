@@ -210,17 +210,23 @@ class Agent:
                         log.info("🤖 Agent chamando tool", tool=tool_name, input=tool_input)
 
                         # Cache lookup: chave = nome + inputs canônicos.
-                        # Bypass pra tools com efeito colateral (executar
-                        # ajuste, registrar visita, enviar mensagem).
+                        # Só pra tools cacheáveis (leituras): tool de escrita
+                        # servida do cache NÃO grava, e tool de envio NÃO
+                        # enfileira a mídia. O check vale no GET também —
+                        # entries antigos persistidos no chat.context não
+                        # podem ressuscitar um envio/gravação.
+                        tool_obj = self.tools.get(tool_name)
+                        can_cache = bool(tool_obj and tool_obj.cacheable)
                         cache_key = self._tool_cache_key(tool_name, tool_input)
-                        cached = self._tool_cache_get(cache_key)
+                        cached = self._tool_cache_get(cache_key) if can_cache else None
                         if cached is not None:
                             log.info("🧠 Tool [%s] cache hit", tool_name)
                             result = cached
                             self.tool_cache_hits += 1
-                        elif tool_name in self.tools:
-                            result = self.tools[tool_name].run(**tool_input)
-                            self._tool_cache_put(cache_key, result, tool_name)
+                        elif tool_obj is not None:
+                            result = tool_obj.run(**tool_input)
+                            if can_cache and not (isinstance(result, dict) and result.get("_no_cache")):
+                                self._tool_cache_put(cache_key, result, tool_name)
                         else:
                             result = {"error": f"Tool '{tool_name}' não encontrada"}
 

@@ -22,12 +22,18 @@ class Tool:
         description: Descrição do que a ferramenta faz (usado no prompt)
         parameters: Schema dos parâmetros esperados
         function: A função Python que executa a ferramenta
+        cacheable: se False, o resultado NUNCA entra no tool cache do agente.
+            Obrigatório False pra tools de ESCRITA (cache hit = o agente acha
+            que gravou e NÃO gravou) e de ENVIO (mídia/botões enfileirados só
+            acontecem na execução real). Tools de leitura podem ainda sinalizar
+            caso a caso retornando {"_no_cache": True} no resultado.
     """
 
     name: str
     description: str
     parameters: dict
     function: Callable[..., Any]
+    cacheable: bool = True
 
     def run(self, **kwargs) -> Any:
         """Executa a ferramenta com os parâmetros fornecidos."""

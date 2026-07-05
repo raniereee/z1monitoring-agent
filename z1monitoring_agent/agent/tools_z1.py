@@ -1784,6 +1784,7 @@ def consumo(granja: str, dias: int = 7, formato: str = "dados") -> dict:
 
             qtd = len([m for m in result if m.get("type") in ["image", "image_upload"]])
             return {
+                "_no_cache": True,  # envio de mídia: cache hit não reenviaria as imagens
                 "granja": farm.name,
                 "dias": dias,
                 "graficos_gerados": qtd,
@@ -4797,6 +4798,7 @@ TOOLS_Z1 = [
             "required": ["granja", "sensor", "valor_min", "valor_max"],
         },
         function=ajustar_faixa,
+        cacheable=False,
     ),
     Tool(
         name="controlar_dosadora",
@@ -4815,6 +4817,7 @@ TOOLS_Z1 = [
             "required": ["granja", "dosadora", "acao"],
         },
         function=controlar_dosadora,
+        cacheable=False,
     ),
     Tool(
         name="controlar_abs",
@@ -4829,6 +4832,7 @@ TOOLS_Z1 = [
             "required": ["granja", "dosadora", "acao"],
         },
         function=controlar_abs,
+        cacheable=False,
     ),
     Tool(
         name="definir_limite_24h",
@@ -4843,6 +4847,7 @@ TOOLS_Z1 = [
             "required": ["granja", "dosadora", "limite_kg"],
         },
         function=definir_limite_24h,
+        cacheable=False,
     ),
     Tool(
         name="ajustar_oz1",
@@ -4866,6 +4871,7 @@ TOOLS_Z1 = [
             "required": ["granja"],
         },
         function=ajustar_oz1,
+        cacheable=False,
     ),
     # ===== ALARMES =====
     Tool(
@@ -4881,6 +4887,7 @@ TOOLS_Z1 = [
             "required": ["granja", "acao"],
         },
         function=controlar_alarme_galpao,
+        cacheable=False,
     ),
     # ===== NAVEGAÇÃO =====
     Tool(
@@ -4888,6 +4895,7 @@ TOOLS_Z1 = [
         description="Mostra o menu principal de opções. Use quando o usuário pedir ajuda ou não souber o que fazer.",
         parameters={"type": "object", "properties": {}, "required": []},
         function=mostrar_menu_principal,
+        cacheable=False,
     ),
     Tool(
         name="resetar_conversa",
@@ -4900,12 +4908,14 @@ TOOLS_Z1 = [
         ),
         parameters={"type": "object", "properties": {}, "required": []},
         function=resetar_conversa,
+        cacheable=False,
     ),
     Tool(
         name="mostrar_ajuda",
         description="Mostra guia completo de todas as funcionalidades disponíveis.",
         parameters={"type": "object", "properties": {}, "required": []},
         function=mostrar_ajuda,
+        cacheable=False,
     ),
     Tool(
         name="suporte",
@@ -4925,6 +4935,7 @@ TOOLS_Z1 = [
             "required": [],
         },
         function=suporte,
+        cacheable=False,
     ),
     # ===== DADOS E RELATÓRIOS =====
     Tool(
@@ -5041,6 +5052,7 @@ TOOLS_Z1 = [
             "required": ["granja", "saida", "acao"],
         },
         function=controlar_saida,
+        cacheable=False,
     ),
     Tool(
         name="consultar_quadros_com_problema",
@@ -5072,6 +5084,7 @@ TOOLS_Z1 = [
             "required": [],
         },
         function=abrir_lote,
+        cacheable=False,
     ),
     Tool(
         name="fechar_lote",
@@ -5094,6 +5107,7 @@ TOOLS_Z1 = [
             "required": [],
         },
         function=fechar_lote,
+        cacheable=False,
     ),
     Tool(
         name="informar_mortalidade",
@@ -5119,6 +5133,7 @@ TOOLS_Z1 = [
             "required": [],
         },
         function=informar_mortalidade,
+        cacheable=False,
     ),
     Tool(
         name="registrar_racao",
@@ -5142,6 +5157,7 @@ TOOLS_Z1 = [
             "required": ["peso_kg", "tipo_racao", "nota_fiscal"],
         },
         function=registrar_racao,
+        cacheable=False,
     ),
     Tool(
         name="relatorio_lote",
@@ -5161,6 +5177,7 @@ TOOLS_Z1 = [
             "required": [],
         },
         function=relatorio_lote,
+        cacheable=False,
     ),
     # ===== PPM E FONTE DE ÁGUA =====
     Tool(
@@ -5186,6 +5203,7 @@ TOOLS_Z1 = [
             "required": ["ppm"],
         },
         function=registrar_ppm,
+        cacheable=False,
     ),
     Tool(
         name="mudar_fonte_agua",
@@ -5206,6 +5224,7 @@ TOOLS_Z1 = [
             "required": [],
         },
         function=mudar_fonte_agua,
+        cacheable=False,
     ),
     # ===== AGENDAMENTO DE pH E AUDITORIA CCD =====
     Tool(
@@ -5230,6 +5249,7 @@ TOOLS_Z1 = [
             "required": ["ph_min", "ph_max", "data_agendamento", "hora_agendamento"],
         },
         function=agendar_ph,
+        cacheable=False,
     ),
     Tool(
         name="consultar_alteracoes_ccd",
@@ -5272,6 +5292,7 @@ TOOLS_Z1 = [
             "required": ["mensagem", "opcoes"],
         },
         function=enviar_opcoes,
+        cacheable=False,
     ),
     # ===== INSTITUCIONAL =====
     Tool(
@@ -5297,6 +5318,7 @@ TOOLS_Z1 = [
             "required": ["topico"],
         },
         function=info_z1,
+        cacheable=False,
     ),
     # ===== REGISTRO DE VISITA =====
     Tool(
@@ -5312,6 +5334,7 @@ TOOLS_Z1 = [
             "required": ["granja"],
         },
         function=registrar_visita,
+        cacheable=False,
     ),
 
     # ===== DIMENSIONAMENTO ETA =====
@@ -5344,6 +5367,7 @@ TOOLS_Z1 = [
             "required": ["consumo_diario_litros", "ferro", "manganes", "ph"],
         },
         function=dimensionar_eta,
+        cacheable=False,
     ),
     # ===== NOTIFICAÇÃO INTERMEDIÁRIA =====
     Tool(
@@ -5358,6 +5382,7 @@ TOOLS_Z1 = [
             "required": ["mensagem"],
         },
         function=notificar_usuario,
+        cacheable=False,
     ),
     # ===== RANKING DE OFFLINE =====
     Tool(
@@ -5444,6 +5469,7 @@ TOOLS_Z1 = [
             "required": ["mensagem", "botoes"],
         },
         function=enviar_botoes_confirmacao,
+        cacheable=False,
     ),
     # ===== EXECUÇÃO DE AJUSTES (após confirmação) =====
     Tool(
@@ -5473,5 +5499,6 @@ TOOLS_Z1 = [
             "required": ["granja"],
         },
         function=confirmar_ajuste_parametro,
+        cacheable=False,
     ),
 ]
