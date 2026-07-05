@@ -1136,7 +1136,8 @@ def buscar_granja(nome: str) -> dict:
                         "W≈V, K≈C/QU, CK≈K, SCH≈X, SS≈S, vogal final varia (Wolf≈Wolfe). "
                         "A consoante INICIAL do núcleo não muda fora dessas classes — "
                         "Bello NÃO é Mello. Um único candidato compatível pelo som → use-o "
-                        "direto; mais de um plausível ou nenhum → pergunte ao usuário."
+                        "direto; mais de um plausível → apresente-os com enviar_opcoes; "
+                        "nenhum → diga que não achou."
                     ),
                 }
             candidates = [farm.name]
@@ -1146,7 +1147,7 @@ def buscar_granja(nome: str) -> dict:
                 "encontrada": False,
                 "ambiguo": True,
                 "candidatas": candidates,
-                "mensagem": f"Encontrei {len(candidates)} granjas com nome parecido. Qual delas?",
+                "mensagem": f"Encontrei {len(candidates)} granjas com nome parecido — apresente as candidatas com enviar_opcoes.",
             }
 
         farm_name = candidates[0]
@@ -3727,6 +3728,47 @@ def notificar_usuario(mensagem: str) -> dict:
     return {"acao": "notificacao_enviada", "mensagem": mensagem}
 
 
+def enviar_opcoes(mensagem: str, opcoes: list) -> dict:
+    """
+    Apresenta OPÇES CLICÁVEIS ao usuário: até 3 viram botões; de 4 a 10
+    viram lista interativa do WhatsApp. Use SEMPRE que precisar que o
+    usuário escolha entre alternativas (granjas parecidas, galpões, lotes)
+    — nunca peça pra digitar o nome, o clique volta com o texto exato.
+    """
+    ctx = get_user_context()
+    if not ctx:
+        return {"erro": "Contexto do usuário não disponível"}
+    itens = [str(o).strip() for o in (opcoes or []) if str(o).strip()]
+    if not itens:
+        return {"erro": "Nenhuma opção fornecida"}
+
+    truncadas = 0
+    if len(itens) <= 3:
+        botoes = []
+        for i, o in enumerate(itens):
+            if len(o) > 20:
+                truncadas += 1
+            botoes.append({"id": f"opt_{i}", "title": o[:20]})
+        ctx.pending_messages.append({"type": "buttons", "msg": mensagem, "buttons": botoes})
+        formato = "botoes"
+    else:
+        if len(itens) > 10:
+            itens = itens[:10]  # limite de rows da lista interativa da Meta
+        if any(len(o) > 24 for o in itens):
+            truncadas = sum(1 for o in itens if len(o) > 24)
+        ctx.pending_messages.append({"type": "list", "msg": mensagem, "rows": [o[:24] for o in itens]})
+        formato = "lista"
+
+    log.info("enviar_opcoes enfileirado", formato=formato, n=len(itens), truncadas=truncadas)
+    return {
+        "acao": "opcoes_enviadas",
+        "formato": formato,
+        "opcoes": itens,
+        "mensagem": "Opções enviadas ao usuário. A escolha volta como texto do item clicado"
+        + (" (alguns títulos foram truncados no envio — o texto que voltar pode vir cortado; case por prefixo)." if truncadas else "."),
+    }
+
+
 def enviar_botoes_confirmacao(mensagem: str, botoes: list) -> dict:
     """
     Envia botões interativos ao usuário via WhatsApp para confirmação.
@@ -5169,6 +5211,26 @@ TOOLS_Z1 = [
             "required": ["granja"],
         },
         function=consultar_alteracoes_ccd,
+    ),
+    # ===== OPÇÕES CLICÁVEIS =====
+    Tool(
+        name="enviar_opcoes",
+        description=(
+            "Apresenta opções CLICÁVEIS ao usuário (até 3 = botões; 4-10 = lista interativa). Use "
+            "SEMPRE que o usuário precisar escolher entre alternativas — granjas parecidas, galpões, "
+            "lotes, requer_escolha de qualquer tool. NUNCA peça pra digitar o nome: o clique volta "
+            "com o texto exato e evita novo erro de grafia. Para confirmação sim/não use "
+            "enviar_botoes_confirmacao."
+        ),
+        parameters={
+            "type": "object",
+            "properties": {
+                "mensagem": {"type": "string", "description": "Pergunta curta (ex: 'Qual granja?')"},
+                "opcoes": {"type": "array", "items": {"type": "string"}, "description": "Até 10 opções, texto exato de cada uma"},
+            },
+            "required": ["mensagem", "opcoes"],
+        },
+        function=enviar_opcoes,
     ),
     # ===== INSTITUCIONAL =====
     Tool(
