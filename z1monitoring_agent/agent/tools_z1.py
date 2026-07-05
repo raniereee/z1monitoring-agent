@@ -1132,10 +1132,10 @@ def buscar_granja(nome: str) -> dict:
                     "mensagem": (
                         f"Nenhum match direto para '{nome}'. Compare PELO SOM com a lista "
                         "'similares', pelo NÚCLEO/sobrenome do nome (o produtor fala o "
-                        "sobrenome: 'losso' = 'MARCOS LOSS'). Grafias equivalentes: W≈V, "
-                        "K≈C/QU, CK≈K, SCH≈X, SS≈S, vogal final varia (Loss≈Losso). "
+                        "sobrenome: 'kolling' = 'PEDRO KOLLING'). Grafias equivalentes: "
+                        "W≈V, K≈C/QU, CK≈K, SCH≈X, SS≈S, vogal final varia (Wolf≈Wolfe). "
                         "A consoante INICIAL do núcleo não muda fora dessas classes — "
-                        "Basso NÃO é Losso. Um único candidato compatível pelo som → use-o "
+                        "Bello NÃO é Mello. Um único candidato compatível pelo som → use-o "
                         "direto; mais de um plausível ou nenhum → pergunte ao usuário."
                     ),
                 }
