@@ -15,6 +15,7 @@ do sistema de steps atual, organizadas por categoria:
 9. NAVEGAÇÃO - Menu, ajuda, panorama
 """
 
+import contextvars
 import os
 import structlog
 from datetime import datetime, timedelta
@@ -132,19 +133,27 @@ class UserContext:
         self.reset_requested = False  # Sinaliza ao handler que o histórico deve ser zerado após o turno
 
 
-# Contexto global (será setado pelo handler)
-_current_context: Optional[UserContext] = None
+# Contexto do usuário isolado por thread/task via contextvars.
+# ANTES era um global de módulo simples (`_current_context = None`),
+# COMPARTILHADO entre todas as threads do mesmo processo. Sob concorrência com
+# threads (Gunicorn gthread/gevent, pool de threads do Celery, ou uma tool
+# rodando em thread spawned) um usuário podia herdar o contexto de outro
+# (vazamento cross-tenant). ContextVar isola por thread e por task asyncio;
+# uma thread nova nasce SEM valor (default None) e, combinada com a checagem
+# fail-closed nas tools/helpers, NEGA acesso em vez de vazar dados.
+_current_context: "contextvars.ContextVar[Optional[UserContext]]" = contextvars.ContextVar(
+    "z1_user_context", default=None
+)
 
 
 def set_user_context(user, conversation=None):
-    """Define o contexto do usuário para as ferramentas."""
-    global _current_context
-    _current_context = UserContext(user, conversation)
+    """Define o contexto do usuário para as ferramentas (isolado por thread/task)."""
+    _current_context.set(UserContext(user, conversation))
 
 
 def get_user_context() -> Optional[UserContext]:
-    """Obtém o contexto do usuário atual."""
-    return _current_context
+    """Obtém o contexto do usuário atual (None se não setado nesta thread/task)."""
+    return _current_context.get()
 
 
 _PRIMARY_PERM_NAMES = {
@@ -165,7 +174,9 @@ def _get_allowed_farm_names(ctx):
     Retorna a lista de nomes de farms que o usuário tem acesso.
     Retorna None quando é ADMIN (sem filtro).
     """
-    if not ctx or ctx.is_admin:
+    if not ctx:
+        return []  # fail-closed: sem contexto → nenhuma granja permitida
+    if ctx.is_admin:
         return None
     if ctx.permission_name in _PRIMARY_PERM_NAMES:
         farms = Farm.get_all_that_associated_allowed_permitted(ctx.associated)
@@ -179,7 +190,9 @@ def _enforce_farm_access(farm):
     if not farm:
         return None
     ctx = get_user_context()
-    if not ctx or ctx.is_admin:
+    if not ctx:
+        return None  # fail-closed: sem contexto → nega acesso
+    if ctx.is_admin:
         return farm
     allowed = _get_allowed_farm_names(ctx) or []
     if farm.name in allowed:
@@ -235,7 +248,9 @@ def _require_write(fn):
 
 def _farm_names_in_scope(ctx):
     """Nomes de granja visíveis pro usuário (admin = todas)."""
-    if not ctx or ctx.is_admin:
+    if not ctx:
+        return []  # fail-closed: sem contexto → nenhuma granja visível
+    if ctx.is_admin:
         farms = Farm.get_all_farms_objs_filtereds({}) or []
         return [f.name for f in farms if f.name]
     return [n for n in (_get_allowed_farm_names(ctx) or []) if n]
@@ -253,7 +268,9 @@ def _farms_com_aliases(ctx):
     (equivalente ao 'qual dos locais do cliente?' do guiado)."""
     from z1monitoring_models.models.clients_secondary import ClientSecondary
 
-    if not ctx or ctx.is_admin:
+    if not ctx:
+        return []  # fail-closed: sem contexto → sem granjas/aliases
+    if ctx.is_admin:
         farms = Farm.get_all_farms_objs_filtereds({}) or []
     elif ctx.permission_name in _PRIMARY_PERM_NAMES:
         farms = Farm.get_all_that_associated_allowed_permitted(ctx.associated) or []
@@ -262,7 +279,7 @@ def _farms_com_aliases(ctx):
 
     aliases_por_ident = {}
     try:
-        filter_cs = {} if (not ctx or ctx.is_admin) else {"associateds_allowed": ctx.associated}
+        filter_cs = {} if ctx.is_admin else {"associateds_allowed": ctx.associated}
         for s in ClientSecondary.get_all(filter_cs) or []:
             nomes = [n for n in (getattr(s, "name", None), getattr(s, "fantasy_name", None)) if n]
             if nomes:
@@ -913,7 +930,7 @@ def listar_clientes_primarios(nome: str = None) -> dict:
     ctx = get_user_context()
     try:
         # Apenas admin pode ver clientes primários
-        if ctx and not ctx.is_admin:
+        if not ctx or not ctx.is_admin:
             return {"erro": "Apenas administradores podem listar clientes primários"}
 
         from z1monitoring_models.models.clients_primary import ClientPrimary
@@ -961,7 +978,7 @@ def buscar_cliente_primario(nome: str) -> dict:
     """
     ctx = get_user_context()
     try:
-        if ctx and not ctx.is_admin:
+        if not ctx or not ctx.is_admin:
             return {"erro": "Apenas administradores podem buscar clientes primários"}
 
         from z1monitoring_models.models.clients_primary import ClientPrimary
@@ -1005,7 +1022,7 @@ def listar_granjas_cliente_primario(nome_cliente: str, tipo_equipamento: str = N
     """
     ctx = get_user_context()
     try:
-        if ctx and not ctx.is_admin:
+        if not ctx or not ctx.is_admin:
             return {"erro": "Apenas administradores podem consultar por cliente primário"}
 
         from z1monitoring_models.models.clients_primary import ClientPrimary
@@ -1093,7 +1110,7 @@ def consultar_falta_gas_cliente_primario(nome_cliente: str) -> dict:
     """
     ctx = get_user_context()
     try:
-        if ctx and not ctx.is_admin:
+        if not ctx or not ctx.is_admin:
             return {"erro": "Apenas administradores podem consultar por cliente primário"}
 
         from z1monitoring_models.models.clients_primary import ClientPrimary
