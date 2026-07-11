@@ -15,7 +15,7 @@ Regras importantes:
   ligados ao circuito hidráulico.
 """
 
-from datetime import timedelta
+from datetime import datetime, timedelta
 from z1monitoring_models.tz import now_utc
 from typing import Optional
 
