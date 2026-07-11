@@ -1178,7 +1178,7 @@ def mount_realtime_message(filters):
                     )
 
             if flx_data:
-                time_str = latest_time.strftime("%H:%M %d/%m/%Y") if latest_time else ""
+                time_str = to_sp(latest_time).strftime("%H:%M %d/%m/%Y") if latest_time else ""
                 msg_tmp += f"🚰 *HIDRÔMETROS* - {time_str}\n\n"
                 msg_tmp += "📍 LOCAL     💧 FLUXO    📊 CONSUMO\n"
                 msg_tmp += "-----------------------\n"
