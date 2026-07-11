@@ -14,7 +14,7 @@ from z1monitoring_agent.utils.whatsapp_utils import (
     mount_only_temperature,
 )
 from z1monitoring_models.models.choose_event_model import get_events_model
-import datetime
+from z1monitoring_models.tz import now_utc
 from datetime import timedelta
 from z1monitoring_agent.utils.consumption_graphics_generator import generate_consumption_graphics
 from z1monitoring_models.models.farm import Farm
@@ -808,7 +808,7 @@ def handler_graphic_request(farm, plates, number_of_days_analisys):
         return [{"type": "text", "msg": msg}]
 
     msg_text = mount_header_farm(farm)
-    now = datetime.datetime.now()
+    now = now_utc()
     date_upper = now.strftime("%Y-%m-%d %H:%M:%S")
     date_lower = (now - timedelta(days=number_of_days_analisys)).strftime("%Y-%m-%d 00:00:00")
 

@@ -15,7 +15,8 @@ Regras importantes:
   ligados ao circuito hidráulico.
 """
 
-from datetime import datetime, timedelta
+from datetime import timedelta
+from z1monitoring_models.tz import now_utc
 from typing import Optional
 
 import structlog
@@ -597,7 +598,7 @@ def condense_eta_timeline(
     if not farm:
         return {}
 
-    end_dt = end or datetime.now()
+    end_dt = end or now_utc()
     start_dt = end_dt - timedelta(hours=window_hours)
 
     has_ccd = _farm_has_ccd(farm_id)

@@ -12,7 +12,7 @@ Calcula:
 import os
 import uuid
 import tempfile
-from datetime import datetime
+from z1monitoring_models.tz import now_sp
 from fpdf import FPDF
 import matplotlib
 matplotlib.use("Agg")
@@ -198,7 +198,7 @@ def generate_pdf(dimensionamento: dict) -> str:
 
     cliente = dimensionamento.get("cliente", "")
     local = dimensionamento.get("local", "")
-    data = datetime.now().strftime("%d/%m/%Y")
+    data = now_sp().strftime("%d/%m/%Y")
 
     if cliente:
         pdf.cell(0, 6, f"Cliente: {cliente}", new_x="LMARGIN", new_y="NEXT")
@@ -491,7 +491,7 @@ def generate_memorial_pdf(memorial: dict, basics: dict) -> str:
     cliente = basics.get("cliente", "")
     local = basics.get("local", "")
     fonte = basics.get("fonte_origem", "")
-    data = datetime.now().strftime("%d/%m/%Y")
+    data = now_sp().strftime("%d/%m/%Y")
     vol_dia = basics.get("volume_diario_litros") or 0
     vol_proj = basics.get("volume_projeto_litros") or 0
     vazao = basics.get("vazao_min_lh") or 0

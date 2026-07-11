@@ -2,7 +2,7 @@ from z1monitoring_models.models.active_chats import ActiveChats
 from z1monitoring_models.models.plates import Plate
 from z1monitoring_models.models.choose_event_model import get_events_model
 from z1monitoring_models.dbms import Session
-import datetime
+from z1monitoring_models.tz import now_sp, now_utc
 import structlog
 from z1monitoring_models.constants import PLATES_TYPES
 
@@ -16,7 +16,7 @@ class Conversation:
 
 
 def get_weather():
-    now = datetime.datetime.now()
+    now = now_sp()
     weather = "Olá"
     if now.hour > 0 and now.hour < 12:
         weather = "Bom dia"
@@ -1285,7 +1285,7 @@ def check_recent_unanswered_alarms(user_phone):
     log.info("🔍 Verificando alarmes recentes")
 
     # Busca alarmes das últimas 24 horas não atendidos
-    now = datetime.datetime.now()
+    now = now_utc()
     time_limit = now - timedelta(hours=24)
 
     try:

@@ -19,6 +19,7 @@ import contextvars
 import os
 import structlog
 from datetime import datetime, timedelta
+from z1monitoring_models.tz import now_sp, now_utc
 from typing import Optional
 from .tools import Tool
 
@@ -447,7 +448,7 @@ def consultar_alarmes(granja: str = None, dias: int = 1) -> dict:
     """
     try:
         ctx = get_user_context()
-        data_inicio = datetime.now() - timedelta(days=dias)
+        data_inicio = now_utc() - timedelta(days=dias)
         allowed_farm_names = _get_allowed_farm_names(ctx)
 
         if granja:
@@ -513,7 +514,7 @@ def consultar_equipamentos(status: str = "offline") -> dict:
         if is_offline:
             from z1monitoring_models.models.events_last import LastEvent
             from datetime import datetime
-            now = datetime.now()
+            now = now_utc()
 
             for plate in plates:
                 last = LastEvent.get_last_register(plate.owner, plate.serial)
@@ -1895,7 +1896,7 @@ def consumo(granja: str, dias: int = 7, formato: str = "dados") -> dict:
         if not plates:
             return {"erro": f"Nenhum equipamento encontrado em '{farm.name}'"}
 
-        now = datetime.datetime.now()
+        now = now_utc()
         date_upper = now.strftime("%Y-%m-%d %H:%M:%S")
         date_lower = (now - timedelta(days=dias)).strftime("%Y-%m-%d 00:00:00")
 
@@ -2364,7 +2365,7 @@ def panorama_24h(granja: str = None, cliente_primario: str = None) -> dict:
         from z1monitoring_models.models.clients_primary import ClientPrimary
 
         ctx = get_user_context()
-        now = datetime.now()
+        now = now_utc()
         inicio = now - timedelta(hours=24)
         truncated = False
         truncated_motivo = None
@@ -3435,7 +3436,7 @@ def _parse_data_hora(data_agendamento, hora_agendamento):
         else:
             partes = [int(p) for p in d.split("/")]
             if len(partes) == 2:
-                partes.append(datetime.now().year)
+                partes.append(now_sp().year)
             if partes[2] < 100:
                 partes[2] += 2000
             from datetime import date as _date
@@ -3478,7 +3479,7 @@ def agendar_ph(
         scheduled_dt = _parse_data_hora(data_agendamento, hora_agendamento)
         if scheduled_dt is None:
             return {"erro": "Data/hora inválida. Use data YYYY-MM-DD (ou DD/MM) e hora HH:MM."}
-        agora = datetime.now()
+        agora = now_sp()
         if scheduled_dt <= agora:
             return {
                 "erro": "A data/hora do agendamento deve ser no futuro.",
@@ -4211,7 +4212,7 @@ def saude_empresa(empresa: str, problema: str = "todos", dias_minimo: int = 0) -
         from z1monitoring_models.models.clients_primary import ClientPrimary
         from datetime import datetime
 
-        now = datetime.now()
+        now = now_utc()
 
         # Buscar granjas da empresa
         matches = ClientPrimary.get_all_associated_by_name(empresa)
