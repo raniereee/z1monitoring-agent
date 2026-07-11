@@ -16,6 +16,7 @@ fora de latin-1 (—, …) no conteúdo do PDF; usamos hífen e reticências ASC
 import os
 import tempfile
 from datetime import date
+from z1monitoring_models.tz import to_sp
 
 import structlog
 from fpdf import FPDF
@@ -316,7 +317,7 @@ def gerar_pdf_lote(lote, farm, galpao, ppms, snapshot=None, racao_habilitada=Fal
     pdf.set_font("Helvetica", "", 9)
     for r in ppms:
         ppm, ph, orp, temp = _ppm_fields(r)
-        quando = r.created_at.strftime("%d/%m/%Y") if getattr(r, "created_at", None) else "-"
+        quando = to_sp(r.created_at).strftime("%d/%m/%Y") if getattr(r, "created_at", None) else "-"
         valores = [
             quando,
             _safe(r.local or "-")[:24],

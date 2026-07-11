@@ -19,7 +19,7 @@ import contextvars
 import os
 import structlog
 from datetime import datetime, timedelta
-from z1monitoring_models.tz import now_sp, now_utc
+from z1monitoring_models.tz import now_sp, now_utc, to_sp
 from typing import Optional
 from .tools import Tool
 
@@ -396,7 +396,7 @@ def _enrich_alarm(alarme, plate_map: dict = None) -> dict:
         "sensor": alarme.sensor,
         "status": alarme.status,
         "atendido": alarme.attended,
-        "data": alarme.created_at.strftime("%d/%m %H:%M") if alarme.created_at else None,
+        "data": to_sp(alarme.created_at).strftime("%d/%m %H:%M") if alarme.created_at else None,
     }
 
 
@@ -704,7 +704,7 @@ def status_equipamento(serial: str) -> dict:
             "granja": plate.farm_associated,
             "descricao": plate.description,
             "comunicando": plate.have_communication,
-            "ultimo_contato": plate.updated_at.strftime("%d/%m %H:%M") if plate.updated_at else None,
+            "ultimo_contato": to_sp(plate.updated_at).strftime("%d/%m %H:%M") if plate.updated_at else None,
         }
 
         # Adiciona sensores se disponíveis
@@ -4293,7 +4293,7 @@ def saude_empresa(empresa: str, problema: str = "todos", dias_minimo: int = 0) -
                             if dias_prob >= dias_minimo:
                                 problemas_placa.append({
                                     "tipo": prob,
-                                    "desde": active.created_at.strftime("%d/%m/%Y"),
+                                    "desde": to_sp(active.created_at).strftime("%d/%m/%Y"),
                                     "dias": dias_prob,
                                 })
 

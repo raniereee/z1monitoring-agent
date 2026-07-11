@@ -2,7 +2,7 @@ from z1monitoring_models.models.active_chats import ActiveChats
 from z1monitoring_models.models.plates import Plate
 from z1monitoring_models.models.choose_event_model import get_events_model
 from z1monitoring_models.dbms import Session
-from z1monitoring_models.tz import now_sp, now_utc
+from z1monitoring_models.tz import now_sp, now_utc, to_sp
 import structlog
 from z1monitoring_models.constants import PLATES_TYPES
 
@@ -55,7 +55,7 @@ def mount_only_ph(plate, last_ev):
         msg += """ ainda não possui leituras. ⏳ Aguardando...!\n\n"""
         return msg
 
-    msg += f"""📆 {last_ev["created_at"].strftime("%H:%M:%S %d/%m/%Y")}\n\n"""
+    msg += f"""📆 {to_sp(last_ev["created_at"]).strftime("%H:%M:%S %d/%m/%Y")}\n\n"""
     if plate["have_communication"]:
         msg += """📡 *Online*\n"""
     else:
@@ -92,7 +92,7 @@ def mount_only_audio_ph(plate, last_ev):
         else:
             msg += f"""pH  : {last_ev["ph"]}\n"""
 
-    msg += f"""as {last_ev["created_at"].strftime("%H:%M %d/%m/%Y")}\n\n"""
+    msg += f"""as {to_sp(last_ev["created_at"]).strftime("%H:%M %d/%m/%Y")}\n\n"""
 
     return msg
 
@@ -105,7 +105,7 @@ def mount_only_orp(plate, last_ev):
         msg += """ ainda não possui leituras. ⏳ Aguardando...!\n\n"""
         return msg
 
-    msg += f"""📆 {last_ev["created_at"].strftime("%H:%M:%S %d/%m/%Y")}\n\n"""
+    msg += f"""📆 {to_sp(last_ev["created_at"]).strftime("%H:%M:%S %d/%m/%Y")}\n\n"""
     if plate["have_communication"]:
         msg += """📡 *Online*\n"""
     else:
@@ -132,7 +132,7 @@ def mount_only_temperature(plate, last_ev):
         msg += """ ainda não possui leituras. ⏳ Aguardando...!\n\n"""
         return msg
 
-    msg += f"""📆 {last_ev["created_at"].strftime("%H:%M:%S %d/%m/%Y")}\n\n"""
+    msg += f"""📆 {to_sp(last_ev["created_at"]).strftime("%H:%M:%S %d/%m/%Y")}\n\n"""
     if plate["have_communication"]:
         msg += """📡 *Online*\n"""
     else:
@@ -158,7 +158,7 @@ def mount_realtime_sensors(plate, last_ev):
         return msg
 
     if plate["have_communication"]:
-        msg += f"""📆 {last_ev["created_at"].strftime("%H:%M:%S %d/%m/%Y")}\n\n"""
+        msg += f"""📆 {to_sp(last_ev["created_at"]).strftime("%H:%M:%S %d/%m/%Y")}\n\n"""
         msg += """📡 *Online*\n"""
     else:
         msg += """❌  Seu sistema *SMARTPH* está *SEM INTERNET*!\n\n"""
@@ -225,7 +225,7 @@ def mount_realtime_orp(plate, last_ev):
         return msg
 
     try:
-        msg += f"""📆 {last_ev["created_at"].strftime("%H:%M:%S %d/%m/%Y")}\n\n"""
+        msg += f"""📆 {to_sp(last_ev["created_at"]).strftime("%H:%M:%S %d/%m/%Y")}\n\n"""
     except Exception as e:
         e
         pass
@@ -257,7 +257,7 @@ def mount_realtime_phi(plate, last_ev):
         msg += """ ainda não possui leituras. ⏳ Aguardando...!\n\n"""
         return msg
 
-    msg += f"""📆 {last_ev["created_at"].strftime("%H:%M:%S %d/%m/%Y")}\n\n"""
+    msg += f"""📆 {to_sp(last_ev["created_at"]).strftime("%H:%M:%S %d/%m/%Y")}\n\n"""
     if plate["have_communication"]:
         msg += """📡 *Online*\n"""
     else:
@@ -286,7 +286,7 @@ def mount_realtime_water_flow(plate, last_ev):
 
     if plate["have_communication"]:
         msg += """📡 *Online*\n"""
-        msg += f"""📆 {last_ev["created_at"].strftime("%H:%M:%S %d/%m/%Y")}\n\n"""
+        msg += f"""📆 {to_sp(last_ev["created_at"]).strftime("%H:%M:%S %d/%m/%Y")}\n\n"""
     else:
         msg += """❌  Seu sistema *SMARTFLX* está *SEM INTERNET*!\n\n"""
         msg += """*Por favor, verifique sua internet ou reinicie seu equipamento*\n\n"""
@@ -321,7 +321,7 @@ def mount_realtime_chlorine(plate, last_ev):
 
     if plate["have_communication"]:
         msg += """📡 *Online*\n"""
-        msg += f"""📆 {last_ev["created_at"].strftime("%H:%M:%S %d/%m/%Y")}\n\n"""
+        msg += f"""📆 {to_sp(last_ev["created_at"]).strftime("%H:%M:%S %d/%m/%Y")}\n\n"""
     else:
         msg += """❌  Seu sistema *SMARTFLX* está *SEM INTERNET*!\n\n"""
         msg += """*Por favor, verifique sua internet ou reinicie seu equipamento*\n\n"""
@@ -346,7 +346,7 @@ def mount_realtime_acid(plate, last_ev):
 
     if plate["have_communication"]:
         msg += """📡 *Online*\n"""
-        msg += f"""📆 {last_ev["created_at"].strftime("%H:%M:%S %d/%m/%Y")}\n\n"""
+        msg += f"""📆 {to_sp(last_ev["created_at"]).strftime("%H:%M:%S %d/%m/%Y")}\n\n"""
     else:
         msg += """❌  Seu sistema *SMARTFLX* está *SEM INTERNET*!\n\n"""
         msg += """*Por favor, verifique sua internet ou reinicie seu equipamento*\n\n"""
@@ -371,7 +371,7 @@ def mount_realtime_water_level(plate, last_ev):
         return msg
 
     msg += f"""💧 *Reservatório*  : *{plate["description"]}*\n"""
-    msg += f"""📆 {last_ev["created_at"].strftime("%H:%M:%S %d/%m/%Y")}\n"""
+    msg += f"""📆 {to_sp(last_ev["created_at"]).strftime("%H:%M:%S %d/%m/%Y")}\n"""
     msg += f""" *Volume*                : acima de {last_ev["water_level"]} %\n"""
     msg += """*ATENÇÃO*: seu sistema possui 3 estágios de volume. *A marcação indica apenas a faixa de volume*.\n\n"""
 
@@ -389,7 +389,7 @@ def mount_realtime_clpcg(plate, last_ev, iomap):
         return msg
 
     msg += f"""📟 *Ambiência*  : *{plate["description"]}*\n"""
-    msg += f"""📆 {last_ev["created_at"].strftime("%H:%M:%S %d/%m/%Y")}\n"""
+    msg += f"""📆 {to_sp(last_ev["created_at"]).strftime("%H:%M:%S %d/%m/%Y")}\n"""
 
     if plate["have_communication"]:
         msg += """📡 *Online*\n"""
@@ -488,7 +488,7 @@ def mount_realtime_hda(plate, last_ev):
         return msg
 
     msg += f"""💧 *Presenca de agua*  : *{plate["description"]}*\n"""
-    msg += f"""📆 {last_ev["created_at"].strftime("%H:%M:%S %d/%m/%Y")}\n"""
+    msg += f"""📆 {to_sp(last_ev["created_at"]).strftime("%H:%M:%S %d/%m/%Y")}\n"""
     msg += f""" *Situacão*                : {"✅" if last_ev["water_presence"]else "🚨 - *Sem agua*"}\n\n"""
     msg += "\n\n"
     return msg
@@ -503,7 +503,7 @@ def mount_realtime_iox(plate, last_ev):
 
     if plate["have_communication"]:
         msg += """📡 *Online*\n"""
-        msg += f"""📆 {last_ev["created_at"].strftime("%H:%M:%S %d/%m/%Y")}\n\n"""
+        msg += f"""📆 {to_sp(last_ev["created_at"]).strftime("%H:%M:%S %d/%m/%Y")}\n\n"""
     else:
         msg += """❌  Sua *Smart Sync* está *SEM INTERNET*!\n\n"""
         msg += """*Por favor, verifique sua internet ou reinicie seu equipamento*\n\n"""
@@ -544,7 +544,7 @@ def mount_realtime_wgt(plate, last_ev):
         return msg
 
     if plate["have_communication"]:
-        msg += f"""📡 *Online*  • 🕐 {last_ev["created_at"].strftime("%H:%M")}  • 📅 {last_ev["created_at"].strftime("%d/%m/%Y")}\n\n"""
+        msg += f"""📡 *Online*  • 🕐 {to_sp(last_ev["created_at"]).strftime("%H:%M")}  • 📅 {to_sp(last_ev["created_at"]).strftime("%d/%m/%Y")}\n\n"""
     else:
         msg += """❌  Sua *Plataforma de Carga* está *SEM INTERNET*!\n\n"""
         msg += """*Por favor, verifique sua internet ou reinicie seu equipamento*\n\n"""
@@ -605,7 +605,7 @@ def mount_realtime_status_iox(plate, last_ev):
         return msg
 
     if plate["have_communication"]:
-        msg += f"""📡 *Online*  • 🕐 {last_ev["created_at"].strftime("%H:%M")}  • 📅 {last_ev["created_at"].strftime("%d/%m/%Y")}\n\n"""
+        msg += f"""📡 *Online*  • 🕐 {to_sp(last_ev["created_at"]).strftime("%H:%M")}  • 📅 {to_sp(last_ev["created_at"]).strftime("%d/%m/%Y")}\n\n"""
     else:
         msg += """❌  Sua *Smart Sync* está *SEM INTERNET*!\n\n"""
         msg += """*Por favor, verifique sua internet ou reinicie seu equipamento*\n\n"""
@@ -645,7 +645,7 @@ def mount_realtime_oz1(plate, last_ev):
         return msg
 
     if plate["have_communication"]:
-        msg += f"""📡 *Online*  • 🕐 {last_ev["created_at"].strftime("%H:%M")}  • 📅 {last_ev["created_at"].strftime("%d/%m/%Y")}\n\n"""
+        msg += f"""📡 *Online*  • 🕐 {to_sp(last_ev["created_at"]).strftime("%H:%M")}  • 📅 {to_sp(last_ev["created_at"]).strftime("%d/%m/%Y")}\n\n"""
     else:
         msg += """❌  Sua *Máquina de Ozonio* está *SEM INTERNET*!\n\n"""
         msg += """*Por favor, verifique sua internet ou reinicie seu equipamento*\n\n"""
@@ -680,7 +680,7 @@ def mount_realtime_ccd(plate, last_ev):
         return msg
 
     if plate["have_communication"]:
-        msg += f"""📡 *Online*  • 🕐 {last_ev["created_at"].strftime("%H:%M")}  • 📅 {last_ev["created_at"].strftime("%d/%m/%Y")}\n\n"""
+        msg += f"""📡 *Online*  • 🕐 {to_sp(last_ev["created_at"]).strftime("%H:%M")}  • 📅 {to_sp(last_ev["created_at"]).strftime("%d/%m/%Y")}\n\n"""
         msg += "━━━━━━━━━━━━━\n\n"
     else:
         msg += """❌  Sua *Estação de Dosagem* está *SEM INTERNET*!\n\n"""
@@ -810,7 +810,7 @@ def mount_realtime_az1(plate, last_ev):
 
     if plate["have_communication"]:
         msg += """📡 *Online*\n"""
-        msg += f"""📆 {last_ev["created_at"].strftime("%H:%M:%S %d/%m/%Y")}\n\n"""
+        msg += f"""📆 {to_sp(last_ev["created_at"]).strftime("%H:%M:%S %d/%m/%Y")}\n\n"""
     else:
         msg += """❌  Sua *Ambiêcia* está *SEM INTERNET*!\n\n"""
         msg += """*Por favor, verifique sua internet ou reinicie seu equipamento*\n\n"""
@@ -853,7 +853,7 @@ def mount_realtime_qp4(plate, last_ev):
         return msg
 
     if plate["have_communication"]:
-        msg += f"""📡 *Online*  • 🕐 {last_ev["created_at"].strftime("%H:%M")}  • 📅 {last_ev["created_at"].strftime("%d/%m/%Y")}\n\n"""
+        msg += f"""📡 *Online*  • 🕐 {to_sp(last_ev["created_at"]).strftime("%H:%M")}  • 📅 {to_sp(last_ev["created_at"]).strftime("%d/%m/%Y")}\n\n"""
     else:
         msg += """❌  Seu *Quadro de Comandos* está *SEM INTERNET*!\n\n"""
         msg += """*Por favor, verifique sua internet ou reinicie seu equipamento*\n\n"""
@@ -929,7 +929,7 @@ def mount_realtime_qbt(plate, last_ev):
         msg += "Sem dados no momento.\n\n"
         return msg
 
-    msg += f"""📆 {last_ev["created_at"].strftime("%H:%M:%S %d/%m/%Y")}\n\n"""
+    msg += f"""📆 {to_sp(last_ev["created_at"]).strftime("%H:%M:%S %d/%m/%Y")}\n\n"""
 
     ordered_last_ev = dict(sorted(last_ev.items(), key=lambda x: x[0].lower()))
     for key, value in ordered_last_ev.items():
@@ -1015,7 +1015,7 @@ def mount_tempo_real_elevatoria(plate, last_ev):
         msg += "Sem dados no momento.\n\n"
         return msg
 
-    msg += f"""📆 {last_ev["created_at"].strftime("%H:%M:%S %d/%m/%Y")}\n\n"""
+    msg += f"""📆 {to_sp(last_ev["created_at"]).strftime("%H:%M:%S %d/%m/%Y")}\n\n"""
     falha_list = ""
 
     ordered_last_ev = dict(sorted(last_ev.items(), key=lambda x: x[0].lower()))
@@ -1169,7 +1169,7 @@ def mount_realtime_message(filters):
                         }
                     )
                 else:
-                    last_reading = last_ev["created_at"].strftime("%H:%M") if last_ev else "N/A"
+                    last_reading = to_sp(last_ev["created_at"]).strftime("%H:%M") if last_ev else "N/A"
                     offline_flx.append(
                         {
                             "description": plate.get("description", "Sem nome"),
