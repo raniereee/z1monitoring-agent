@@ -35,6 +35,8 @@ from z1monitoring_models.models.lote import Lote
 from z1monitoring_models.models.integradora import Integradora
 from z1monitoring_models.models.ppm_readings import PpmReading
 from z1monitoring_models.models.events_ccd import EventCCD
+from z1monitoring_models.utils.permissions import is_admin_perm, is_primary_perm
+from z1monitoring_models.utils.segment import is_urban_user, segments_for_user
 
 from z1monitoring_agent.agent import farm_resolver
 from z1monitoring_agent.utils.eta_dimensioning import calculate_eta, generate_pdf
@@ -124,9 +126,17 @@ class UserContext:
         self.conversation = conversation
         self.permission_name = user.permissions.get("name", "SECONDARY") if user else "SECONDARY"
         self.associated = user.associated if user else None
-        self.is_admin = self.permission_name == "ADMIN"
-        self.is_primary = self.permission_name in ["ETA_REPRESENTANTES", "ETEA_REPRESENTANTES_ADMIN", "ETA_REPRESENTANTES_TEC", "ETA_VENDEDOR", "URBANO_REPRESENTANTES"]
-        self.is_urban = self.permission_name == "URBANO_REPRESENTANTES"
+        # Escopo pela coluna `permissions.scope` e segmento pelo ativo — não por
+        # nome de perfil. As listas hardcodadas que estavam aqui divergiam do
+        # backend_whatsapp (que já lia do banco): um perfil urbano novo entrava em
+        # `urban_permissions`, funcionava lá, e aqui era tratado como agro. Foi o
+        # que fez o agente saudar o Primario_Bread como produtor rural. A lista de
+        # `is_primary` ainda tinha o typo "ETEA_REPRESENTANTES_ADMIN", então esse
+        # perfil nunca era reconhecido como primário.
+        self.is_admin = is_admin_perm(self.permission_name)
+        self.is_primary = is_primary_perm(self.permission_name)
+        self.segments = segments_for_user(user)
+        self.is_urban = is_urban_user(user)
         self.pending_messages = []  # Mensagens extras (imagens, docs) para enviar junto com a resposta
         self.msisdn = None  # Telefone do usuário (WhatsApp)
         self.channel = None  # Canal do WhatsApp
@@ -157,16 +167,6 @@ def get_user_context() -> Optional[UserContext]:
     return _current_context.get()
 
 
-_PRIMARY_PERM_NAMES = {
-    "PRIMARY",
-    "ETA_REPRESENTANTES",
-    "ETA_REPRESENTANTES_ADMIN",
-    "ETA_REPRESENTANTES_TEC",
-    "URBANO_REPRESENTANTES",
-    "ETA_VENDEDOR",
-    "ETA_READONLY",
-}
-
 _READONLY_PERM_NAMES = {"ETA_READONLY"}
 
 
@@ -179,7 +179,7 @@ def _get_allowed_farm_names(ctx):
         return []  # fail-closed: sem contexto → nenhuma granja permitida
     if ctx.is_admin:
         return None
-    if ctx.permission_name in _PRIMARY_PERM_NAMES:
+    if ctx.is_primary:
         farms = Farm.get_all_that_associated_allowed_permitted(ctx.associated)
     else:
         farms = Farm.get_all_farms_objs_filtereds({"owner": ctx.associated})
@@ -273,7 +273,7 @@ def _farms_com_aliases(ctx):
         return []  # fail-closed: sem contexto → sem granjas/aliases
     if ctx.is_admin:
         farms = Farm.get_all_farms_objs_filtereds({}) or []
-    elif ctx.permission_name in _PRIMARY_PERM_NAMES:
+    elif ctx.is_primary:
         farms = Farm.get_all_that_associated_allowed_permitted(ctx.associated) or []
     else:
         farms = Farm.get_all_farms_objs_filtereds({"owner": ctx.associated}) or []
@@ -1280,7 +1280,7 @@ def listar_granjas_usuario() -> dict:
             return {"erro": "Contexto de usuário não disponível"}
         if ctx.is_admin:
             farms = Farm.get_all_farms_objs_filtereds({})
-        elif ctx.permission_name in _PRIMARY_PERM_NAMES:
+        elif ctx.is_primary:
             farms = Farm.get_all_that_associated_allowed_permitted(ctx.associated)
         else:
             farms = Farm.get_all_farms_objs_filtereds({"owner": ctx.associated})
@@ -4141,7 +4141,7 @@ def ranking_offline(dias: int = 30, gap_minutos: int = 15) -> dict:
         # Buscar granjas do usuário
         if ctx and ctx.is_admin:
             farms = Farm.get_all_farms_obj()
-        elif ctx and ctx.permission_name in _PRIMARY_PERM_NAMES:
+        elif ctx and ctx.is_primary:
             # Representante primário: granjas via associateds_allowed (o
             # filtro por owner retornava vazio pra esse perfil)
             farms = Farm.get_all_that_associated_allowed_permitted(ctx.associated)
@@ -4223,7 +4223,7 @@ def saude_empresa(empresa: str, problema: str = "todos", dias_minimo: int = 0) -
         # própria (ctx.associated é o CNPJ do cliente primário dele); demais
         # perfis (FARM etc.) não têm visão por empresa.
         if ctx and not ctx.is_admin:
-            if ctx.permission_name in _PRIMARY_PERM_NAMES:
+            if ctx.is_primary:
                 matches = [m for m in matches if m.cnpj == ctx.associated]
                 if not matches:
                     return {"erro": "Você só pode consultar a saúde da sua própria empresa."}
