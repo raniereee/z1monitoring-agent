@@ -2228,31 +2228,9 @@ def relatorio_gas(tipo: str = "consumo", granja: str = None) -> dict:
         Dados do relatório
     """
     if tipo == "abastecimento":
-        ctx = get_user_context()
-        try:
-            from monitoring.services.reports import get_relatorio_abastecimento_gas
-
-            farm_name = "TODOS"
-            if granja:
-                farm = _resolve_farm_acl(granja)
-                if not farm:
-                    return {"erro": f"Granja '{granja}' não encontrada"}
-                farm_name = farm.name
-
-            allowed_farms = None
-            if farm_name == "TODOS" and ctx:
-                if ctx.is_admin:
-                    allowed_farms = None
-                else:
-                    filters = {"associated": ctx.associated}
-                    allowed_farms = Farm.get_all_farm_name(filters)
-
-            result = get_relatorio_abastecimento_gas(farm_name, allowed_farms=allowed_farms)
-            return {"mensagem": result}
-
-        except Exception as e:
-            log.error("Erro relatório abastecimento gás", error=str(e))
-            return {"erro": str(e)}
+        # Relatório de abastecimento descontinuado (dependia da tabela
+        # hourly_summary_events / consolidação horária, removida).
+        return {"mensagem": "⛽ O relatório de abastecimento de gás foi descontinuado."}
     ctx = get_user_context()
     try:
         from z1monitoring_models.models.events import get_events_model
