@@ -3914,6 +3914,41 @@ def enviar_botoes_confirmacao(mensagem: str, botoes: list) -> dict:
 # =============================================================================
 
 
+def _validar_ajuste_ccd(
+    ph_min, ph_max, orp_min, orp_max, limite_acido_24h, limite_cloro_24h
+):
+    """Valida as faixas de segurança da dosagem CCD antes de gravar/sincronizar
+    o setpoint. Mesmos limites das propostas (ajustar_faixa: pH 0-14 / ORP
+    0-1500; definir_limite_24h: 0 < kg <= 100). Retorna a mensagem de erro
+    (str) ou None."""
+    def _f(v):
+        return None if v is None else float(v)
+
+    try:
+        ph_min, ph_max = _f(ph_min), _f(ph_max)
+        orp_min, orp_max = _f(orp_min), _f(orp_max)
+        lim_a, lim_c = _f(limite_acido_24h), _f(limite_cloro_24h)
+    except (TypeError, ValueError):
+        return "valor numérico inválido no ajuste"
+
+    for v, label in ((ph_min, "pH mínimo"), (ph_max, "pH máximo")):
+        if v is not None and not (0 <= v <= 14):
+            return f"{label} deve estar entre 0 e 14"
+    if ph_min is not None and ph_max is not None and ph_min >= ph_max:
+        return "pH mínimo deve ser menor que o pH máximo"
+
+    for v, label in ((orp_min, "ORP mínimo"), (orp_max, "ORP máximo")):
+        if v is not None and not (0 <= v <= 1500):
+            return f"{label} deve estar entre 0 e 1500 mV"
+    if orp_min is not None and orp_max is not None and orp_min >= orp_max:
+        return "ORP mínimo deve ser menor que o ORP máximo"
+
+    for v, label in ((lim_a, "ácido"), (lim_c, "cloro")):
+        if v is not None and not (0 < v <= 100):
+            return f"Limite de {label} deve ser maior que 0 e no máximo 100 kg"
+    return None
+
+
 @_require_write
 def confirmar_ajuste_parametro(
     granja: str,
@@ -3946,6 +3981,15 @@ def confirmar_ajuste_parametro(
             "bloqueado": True,
             "mensagem": "Sua permissão não permite realizar alterações. Todo o fluxo foi executado para que você possa acompanhar o funcionamento real do sistema.",
         }
+
+    # Validação de faixa ANTES de gravar/sincronizar setpoint de dosagem: o LLM
+    # pode chamar esta função direto (sem passar pela proposta), então a checagem
+    # tem que morar aqui, não só na proposta.
+    erro_faixa = _validar_ajuste_ccd(
+        ph_min, ph_max, orp_min, orp_max, limite_acido_24h, limite_cloro_24h
+    )
+    if erro_faixa:
+        return {"erro": erro_faixa}
 
     try:
         farm = _resolve_farm_acl(granja)
