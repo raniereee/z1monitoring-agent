@@ -2677,6 +2677,27 @@ def _lote_dia_iso(raw):
         return date.today().isoformat()
 
 
+def _lote_data_futura(dia_iso, o_que):
+    """Erro padrão quando a data do lançamento cai no futuro — lote é sempre
+    registro do que já aconteceu.
+
+    A origem quase sempre é a transcrição do áudio expandindo o mês ditado
+    por número: "dia 29 do sete" vira "29 de setembro" (sete→setembro,
+    oito→outubro, nove→novembro, dez→dezembro), o que empurra a data 2 meses
+    pra frente. Aqui as tools gravam DIRETO, sem card de confirmação, então
+    esta é a única barreira. Retorna None quando a data está ok."""
+    from datetime import date
+
+    if dia_iso <= date.today().isoformat():
+        return None
+    return {
+        "erro": f"A data {dia_iso} está no futuro — {o_que} só é registrado "
+        "depois de acontecer. Se o produtor ditou o mês por número "
+        "(ex: 'dia 29 do sete' = 29/07), confirme a data com ele e chame "
+        "de novo com a data correta."
+    }
+
+
 def _toggle_iox_alarms(galpao_id, enable):
     """Liga/desliga os alarmes urgentes das IOX do galpão (vínculo via
     plates.galpao_id). Só alterna IOX que JÁ têm alarme configurado em
@@ -2782,6 +2803,10 @@ def abrir_lote(
             }
 
         inicio_iso = _lote_dia_iso(data_inicio)
+        if data_inicio:
+            futura = _lote_data_futura(inicio_iso, "o início do lote")
+            if futura:
+                return futura
         tem_ficha = any(v is not None for v in (quantidade_animais, genero, data_inicio))
         if not confirmado:
             return {
@@ -2872,6 +2897,10 @@ def fechar_lote(
             }
 
         fim_iso = _lote_dia_iso(data_fim)
+        if data_fim:
+            futura = _lote_data_futura(fim_iso, "o fechamento do lote")
+            if futura:
+                return futura
         alvo = [g for g, _ in abertos] if todos else [abertos[0][0]]
         if not confirmado:
             return {
@@ -2971,6 +3000,9 @@ def informar_mortalidade(
             return erro
 
         dia_iso = _lote_dia_iso(data)
+        futura = _lote_data_futura(dia_iso, "a mortalidade")
+        if futura:
+            return futura
         ja_tinha = any(m.get("data") == dia_iso for m in (lote.data or {}).get("mortalidade") or [])
         if ja_tinha and modo not in ("somar", "trocar"):
             quando = date.fromisoformat(dia_iso).strftime("%d/%m/%Y")
@@ -3063,6 +3095,9 @@ def registrar_racao(
             return erro
 
         dia_iso = _lote_dia_iso(data)
+        futura = _lote_data_futura(dia_iso, "a entrega de ração")
+        if futura:
+            return futura
         entrega = {
             "id": str(uuid.uuid4()),
             "data": dia_iso,
