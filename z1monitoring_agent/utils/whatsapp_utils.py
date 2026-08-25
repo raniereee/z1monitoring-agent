@@ -9,6 +9,70 @@ from z1monitoring_models.constants import PLATES_TYPES
 log = structlog.get_logger()
 
 
+def _plate_label(plate):
+    """Label limpo da placa: description se houver, senao o serial.
+
+    Evita `* :  **` e `*ORP* None` na mensagem do produtor quando a placa foi
+    cadastrada sem apelido.
+    """
+    if not plate:
+        return ""
+    if hasattr(plate, "get"):
+        desc, serial = plate.get("description"), plate.get("serial")
+    else:
+        desc, serial = getattr(plate, "description", None), getattr(plate, "serial", None)
+    label = (desc or "").strip()
+    if label:
+        return label
+    return str(serial).strip() if serial else ""
+
+
+def _num(valor, default=None):
+    """Numero da leitura, ou `default` quando a chave nao veio no evento.
+
+    As chaves do evento acompanham o cadastro (rotulo de carga, sensor
+    associado) e a placa so reenvia com o nome novo no ciclo seguinte. Nessa
+    janela qualquer `round()`/comparacao direta estoura e derruba a resposta
+    inteira da granja.
+    """
+    if valor is None:
+        return default
+    try:
+        return float(valor)
+    except (TypeError, ValueError):
+        return default
+
+
+def _fora_faixa(valor, ranges, min_key, max_key):
+    """True so quando da pra afirmar: leitura numerica E faixa cadastrada."""
+    leitura = _num(valor)
+    minimo, maximo = _num((ranges or {}).get(min_key)), _num((ranges or {}).get(max_key))
+    if leitura is None or minimo is None or maximo is None:
+        return False
+    return leitura > maximo or leitura < minimo
+
+
+def _linha_leitura(titulo, valor, label="", ranges=None, min_key=None, max_key=None):
+    """Leitura com o veredito da faixa. Sem faixa cadastrada a leitura NAO
+    some — quem pediu o ORP quer o numero."""
+    if valor is None:
+        return ""
+    marca = "•"
+    if _num(valor) is not None and _num((ranges or {}).get(min_key)) is not None:
+        marca = "❌" if _fora_faixa(valor, ranges, min_key, max_key) else "✅"
+    sufixo = f" {label}" if label else ""
+    return f"{marca} *{titulo}*{sufixo}     : {valor}\n"
+
+
+def _linha_temperatura(valor):
+    """Placa sem sensor de temperatura reporta 0.0 — agua de ETA nao congela.
+    Melhor nao dizer nada do que entregar dado falso."""
+    leitura = _num(valor)
+    if leitura is None or leitura == 0:
+        return ""
+    return f"*Temperatura*          : {valor} ºC\n"
+
+
 class Conversation:
     chat = None
     user = None
@@ -235,16 +299,10 @@ def mount_realtime_orp(plate, last_ev):
     else:
         msg += """❌ *Offline* \n"""
 
-    if "max_orp" in plate["params"]["sensors_ranges"]:
-        if (
-            float(last_ev["orp"]) > plate["params"]["sensors_ranges"]["max_orp"]
-            or float(last_ev["orp"]) < plate["params"]["sensors_ranges"]["min_orp"]
-        ):
-            msg += f"""❌ *ORP* {plate.get("description", " ")}     : {last_ev["orp"]}\n"""
-        else:
-            msg += f"""✅ *ORP* {plate.get("description", " ")}     : {last_ev["orp"]}\n"""
-
-    msg += f"""*Temperatura*          : {last_ev["temperature"]} ºC\n\n"""
+    ranges = (plate.get("params") or {}).get("sensors_ranges") or {}
+    msg += _linha_leitura("ORP", last_ev.get("orp"), _plate_label(plate), ranges, "min_orp", "max_orp")
+    msg += _linha_temperatura(last_ev.get("temperature"))
+    msg += "\n"
 
     return msg
 
@@ -263,23 +321,17 @@ def mount_realtime_phi(plate, last_ev):
     else:
         msg += """❌ *Offline* \n"""
 
-    if "max_ph" in plate["params"]["sensors_ranges"]:
-        if (
-            float(last_ev["ph"]) > plate["params"]["sensors_ranges"]["max_ph"]
-            or float(last_ev["ph"]) < plate["params"]["sensors_ranges"]["min_ph"]
-        ):
-            msg += f"""❌ *pH* {plate.get("description", " ")}     : {last_ev["ph"]}\n"""
-        else:
-            msg += f"""✅ *pH* {plate.get("description", " ")}     : {last_ev["ph"]}\n"""
-
-    msg += f"""*Temperatura*          : {last_ev["temperature"]} ºC\n\n"""
+    ranges = (plate.get("params") or {}).get("sensors_ranges") or {}
+    msg += _linha_leitura("pH", last_ev.get("ph"), _plate_label(plate), ranges, "min_ph", "max_ph")
+    msg += _linha_temperatura(last_ev.get("temperature"))
+    msg += "\n"
 
     return msg
 
 
 def mount_realtime_water_flow(plate, last_ev):
     msg = ""
-    msg += f"""🚰 *Hidrômetro*    : *{plate.get("description", " ")}*\n"""
+    msg += f"""🚰 *Hidrômetro*    : *{_plate_label(plate)}*\n"""
     if last_ev is None:
         msg += "⚠️ Sem dados no momento!\n\n"
         return msg
@@ -538,7 +590,7 @@ def mount_realtime_iox(plate, last_ev):
 
 def mount_realtime_wgt(plate, last_ev):
     msg = ""
-    msg += f"""⏲️ *SMART PLATAFORMA* • *{plate.get("description")}*\n"""
+    msg += f"""⏲️ *SMART PLATAFORMA* • *{_plate_label(plate)}*\n"""
     if not last_ev:
         msg += "Sem dados no momento.\n\n"
         return msg
@@ -565,33 +617,43 @@ def mount_realtime_wgt(plate, last_ev):
     consume = ""
     ordered_last_ev = dict(sorted(un_ordered_last_ev.items(), key=lambda x: x[0].lower()))
     for position, info in ordered_last_ev.items():
-        description = info["description"]
+        # O rotulo da carga vem do cadastro (iomap) e as chaves do evento vem da
+        # placa, que so reenvia com o nome novo no ciclo seguinte. Entre renomear
+        # a carga e a proxima leitura, `last_ev` ainda traz o rotulo antigo — e o
+        # `round(None, 1)` derrubava a resposta INTEIRA da granja.
+        rotulo = (info["description"] or "").strip()
         capacity = info["capacity"]
+        desc = rotulo or f"Carga {position}"
 
-        value_consume = last_ev.get(f"Consumo {description} Acumulado")
-        stock_value = last_ev.get(description)
+        stock_value = last_ev.get(rotulo) if rotulo else None
+        value_consume = last_ev.get(f"Consumo {rotulo} Acumulado") if rotulo else None
 
-        try:
-            stock_float = float(stock_value) if stock_value is not None else None
-        except (ValueError, TypeError):
-            stock_float = None
-        try:
-            cap_float = float(capacity) if capacity else None
-        except (ValueError, TypeError):
-            cap_float = None
+        stock_float = _num(stock_value)
+        cap_float = _num(capacity) or None
 
-        if stock_float is not None and cap_float:
+        if stock_float is None:
+            stock += f"""*{desc}*  → aguardando leitura da balança\n"""
+        elif cap_float:
             pct = (stock_float / cap_float) * 100
-            stock += f"""*{description}*  → {stock_float:.1f} kg — {pct:.0f}%\n"""
+            if pct > 100:
+                # Peso acima da capacidade cadastrada: recipiente trocado ou
+                # cadastro errado. "180%" nao diz nada pro produtor.
+                stock += f"""*{desc}*  → {stock_float:.1f} kg — acima da capacidade cadastrada ({cap_float:.0f} kg)\n"""
+            else:
+                stock += f"""*{desc}*  → {stock_float:.1f} kg — {pct:.0f}%\n"""
         else:
-            stock += f"""*{description}*  → {stock_value} kg\n"""
-        consume += f"""    - *{description}*  : {round(value_consume, 1)} Kg\n"""
+            stock += f"""*{desc}*  → {stock_float:.1f} kg\n"""
+
+        consumo_float = _num(value_consume)
+        if consumo_float is not None:
+            consume += f"""    - *{desc}*  : {round(consumo_float, 1)} Kg\n"""
 
     msg += """📦 ESTOQUE GERAL\n\n"""
     msg += stock
-    msg += "\n"
-    msg += """📊 Consumo do dia\n\n"""
-    msg += consume
+    if consume:
+        msg += "\n"
+        msg += """📊 Consumo do dia\n\n"""
+        msg += consume
 
     msg += "\n\n"
     return msg
@@ -687,14 +749,24 @@ def mount_realtime_ccd(plate, last_ev):
         msg += """*Por favor, verifique sua internet ou reinicie seu equipamento*\n\n"""
         # return msg
 
-    power_status = {0: "Desligada", 1: "Ligada"}
+    def _power(cmd):
+        # `Comando Dosadora` e o PERCENTUAL de acionamento (0, 10, 20, 100), nao
+        # um booleano: o mapa {0: off, 1: on} so acertava a dosadora parada, e
+        # toda dosadora dosando saia como "auto • None" pro produtor. Mesma
+        # regua do painel web (isDosing: 0 < v <= 100).
+        v = _num(cmd)
+        if v is None:
+            return None
+        if v == 0:
+            return "Desligada"
+        return "Ligada" if 0 < v <= 100 else None
 
     msg += "*⚙️ MODO OPERAÇÃO*\n\n"
-    msg += """💧 Dosadora Ácido\n"""
-    msg += f"""   └ {last_ev.get("Modo Dosadora Ácido")} • {power_status.get(last_ev.get("Comando Dosadora Ácido"))}\n\n"""
-
-    msg += """🧴 Dosadora Cloro\n"""
-    msg += f"""   └ {last_ev.get("Modo Dosadora Cloro")} • {power_status.get(last_ev.get("Comando Dosadora Cloro"))}\n\n"""
+    for titulo, insumo in (("💧 Dosadora Ácido", "Ácido"), ("🧴 Dosadora Cloro", "Cloro")):
+        modo = last_ev.get(f"Modo Dosadora {insumo}")
+        estado = _power(last_ev.get(f"Comando Dosadora {insumo}"))
+        msg += f"""{titulo}\n"""
+        msg += f"""   └ {modo} • {estado}\n\n""" if estado is not None else f"""   └ {modo}\n\n"""
     msg += "━━━━━━━━━━━━━\n\n"
 
     associateds_plates_ = plate.get("params", {}).get("associateds_plates", [])
