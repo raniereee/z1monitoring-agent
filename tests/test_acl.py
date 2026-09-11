@@ -145,7 +145,7 @@ def test_lote_farm_denied_so_farm_passa():
             self.is_admin = perm == "ADMIN"
 
     assert tz._lote_farm_denied(Ctx("FARM")) is None
-    for perm in ("ADMIN", "ETA_REPRESENTANTES", "SECONDARY", "ETA_READONLY"):
+    for perm in ("ADMIN", "ETA_REPRESENTANTES", "SECONDARY"):
         assert tz._lote_farm_denied(Ctx(perm)) is not None, perm
     assert tz._lote_farm_denied(None) is not None
 

@@ -167,9 +167,6 @@ def get_user_context() -> Optional[UserContext]:
     return _current_context.get()
 
 
-_READONLY_PERM_NAMES = {"ETA_READONLY"}
-
-
 def _get_allowed_farm_names(ctx):
     """
     Retorna a lista de nomes de farms que o usuário tem acesso.
@@ -209,20 +206,24 @@ def _enforce_farm_access(farm):
 
 
 def _can_write(ctx) -> bool:
-    """Retorna True se o usuário pode executar ações de escrita."""
-    if not ctx:
-        return False
-    return ctx.permission_name not in _READONLY_PERM_NAMES
+    """Escrita exige contexto de usuário resolvido.
+
+    Existia também pra barrar o perfil ETA_READONLY, removido em 11/09/2026
+    (0 usuários, permission apagada do banco). A guarda de contexto AUSENTE
+    fica: e ela que impede uma tool de escrita de rodar quando o agente nao
+    conseguiu resolver quem esta falando — nada a ver com o perfil morto, e e
+    o que os 16 @_require_write continuam protegendo."""
+    return bool(ctx)
 
 
-def _readonly_response(farm_name: str = None) -> dict:
-    """Resposta padronizada quando usuário read-only tenta acao."""
+def _sem_contexto_response(farm_name: str = None) -> dict:
+    """Resposta quando a tool de escrita roda sem contexto de usuário."""
     local_txt = f" em {farm_name}" if farm_name else ""
     return {
-        "erro": "acesso_somente_leitura",
+        "erro": "sem_contexto_de_usuario",
         "mensagem": (
-            f"👁️ Sua conta é somente leitura. Ações de escrita{local_txt} "
-            "devem ser executadas pelo responsável técnico."
+            f"Não consegui confirmar quem está pedindo, então não executei a ação{local_txt}. "
+            "Tente de novo em instantes."
         ),
     }
 
@@ -236,12 +237,12 @@ def _require_write(fn):
         ctx = get_user_context()
         if not _can_write(ctx):
             log.warning(
-                "Tool de escrita bloqueada para usuario read-only",
+                "Tool de escrita bloqueada: sem contexto de usuario",
                 tool=fn.__name__,
                 user=ctx.user.name if ctx and ctx.user else None,
                 permission=ctx.permission_name if ctx else None,
             )
-            return _readonly_response()
+            return _sem_contexto_response()
         return fn(*args, **kwargs)
 
     return wrapper
@@ -4010,13 +4011,6 @@ def confirmar_ajuste_parametro(
     ctx = get_user_context()
     if not ctx:
         return {"erro": "Contexto do usuário não disponível"}
-
-    # ETA_READONLY: não executa ações de escrita
-    if ctx.permission_name == "ETA_READONLY":
-        return {
-            "bloqueado": True,
-            "mensagem": "Sua permissão não permite realizar alterações. Todo o fluxo foi executado para que você possa acompanhar o funcionamento real do sistema.",
-        }
 
     # Validação de faixa ANTES de gravar/sincronizar setpoint de dosagem: o LLM
     # pode chamar esta função direto (sem passar pela proposta), então a checagem
