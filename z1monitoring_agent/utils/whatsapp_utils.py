@@ -1,5 +1,5 @@
 from z1monitoring_models.models.active_chats import ActiveChats
-from z1monitoring_models.models.plates import Plate
+from z1monitoring_models.models.plates import Plate, canais_flx
 from z1monitoring_models.models.choose_event_model import get_events_model
 from z1monitoring_models.dbms import Session
 from z1monitoring_models.tz import now_sp, now_utc, to_sp
@@ -344,21 +344,23 @@ def mount_realtime_water_flow(plate, last_ev):
         msg += """*Por favor, verifique sua internet ou reinicie seu equipamento*\n\n"""
         return msg
 
-    if last_ev["water_flow"] > 1000:
-        flow = round(last_ev["water_flow"] / 1000, 1)
-        msg += f"""*Fluxo*                      : {flow} mil L/min\n"""
-    else:
-        msg += f"""*Fluxo*                      : {round(last_ev["water_flow"])} L/min\n"""
+    # Uma medição no modo único/soma; no independente cada sensor vem com o
+    # nome dele ("Casa 1", "Casa 2") por cima da vazão e do consumo.
+    canais = canais_flx(plate.get("params"), plate.get("description"))
+    for canal in canais:
+        if len(canais) > 1:
+            msg += ("\n" if canal["canal"] > 1 else "") + f"*{canal['rotulo_curto']}*\n"
 
-    # msg += f"""*Temperatura*          : {last_ev["temperature"]} ºC\n"""
+        vazao = last_ev.get(canal["fluxo"])
+        if vazao is not None:
+            if vazao > 1000:
+                msg += f"""*Fluxo*                      : {round(vazao / 1000, 1)} mil L/min\n"""
+            else:
+                msg += f"""*Fluxo*                      : {round(vazao)} L/min\n"""
 
-    if "water_consumed" in last_ev:
-        # if round(last_ev["water_consumed"]) > 1000000:
-        #    water_consumed = int(round(last_ev["water_consumed"])/1000)
-        #    msg += f"""*Consumo do dia*   : {water_consumed} mil L\n"""
-        # else:
-        water_consumed = round(last_ev["water_consumed"])
-        msg += f"""*Consumo do dia*   : {water_consumed} L\n"""
+        if canal["consumo"] in last_ev:
+            water_consumed = round(last_ev[canal["consumo"]])
+            msg += f"""*Consumo do dia*   : {water_consumed} L\n"""
 
     msg += "\n\n"
     return msg
@@ -1208,10 +1210,13 @@ def mount_realtime_message(filters):
             if skip_type:
                 continue
 
-        # Tratamento especial para FLX (hidrômetros) - formato tabela
-        if plate_type == "FLX" and len(plates) > 1:
+        # Tratamento especial para FLX (hidrômetros) - formato tabela, uma
+        # linha por medição (a FLX em modo independente mede duas).
+        n_medicoes = sum(len(canais_flx(p.params, p.description)) for p in plates) if plate_type == "FLX" else 0
+        if plate_type == "FLX" and n_medicoes > 1:
             flx_data = []
             offline_flx = []
+            online_count = 0
             total_consumption = 0
             latest_time = None
 
@@ -1221,25 +1226,27 @@ def mount_realtime_message(filters):
                 last_ev = _Event.get_last_event(plate["owner"], plate["serial"])
 
                 if last_ev and plate["have_communication"]:
-                    flow = (
-                        round(last_ev["water_flow"])
-                        if last_ev["water_flow"] <= 1000
-                        else round(last_ev["water_flow"] / 1000, 1)
-                    )
-                    flow_unit = "L/min" if last_ev["water_flow"] <= 1000 else "mil L/min"
-                    consumption = round(last_ev.get("water_consumed", 0))
-                    total_consumption += consumption
-
+                    online_count += 1
                     if not latest_time or last_ev["created_at"] > latest_time:
                         latest_time = last_ev["created_at"]
 
-                    flx_data.append(
-                        {
-                            "description": plate.get("description", "Sem nome"),
-                            "flow": f"{flow} {flow_unit}",
-                            "consumption": f"{consumption} L",
-                        }
-                    )
+                    canais = canais_flx(plate.get("params"), plate.get("description"))
+                    for canal in canais:
+                        vazao = last_ev.get(canal["fluxo"]) or 0
+                        flow = round(vazao) if vazao <= 1000 else round(vazao / 1000, 1)
+                        flow_unit = "L/min" if vazao <= 1000 else "mil L/min"
+                        consumption = round(last_ev.get(canal["consumo"]) or 0)
+                        total_consumption += consumption
+
+                        flx_data.append(
+                            {
+                                "description": (
+                                    canal["rotulo_curto"] if len(canais) > 1 else plate.get("description", "Sem nome")
+                                ),
+                                "flow": f"{flow} {flow_unit}",
+                                "consumption": f"{consumption} L",
+                            }
+                        )
                 else:
                     last_reading = to_sp(last_ev["created_at"]).strftime("%H:%M") if last_ev else "N/A"
                     offline_flx.append(
@@ -1261,7 +1268,6 @@ def mount_realtime_message(filters):
                     consumption = item["consumption"].rjust(9)
                     msg_tmp += f"{desc}  {flow}  {consumption}\n"
 
-                online_count = len(flx_data)
                 total_formatted = f"{total_consumption:,}".replace(",", ".")
                 msg_tmp += f"\n📡 {online_count} Online | 💧 Total: {total_formatted} L\n"
 

@@ -28,6 +28,11 @@ from z1monitoring_models.models.urgent_alarm import UrgentAlarm
 from z1monitoring_models.models.urgent_alarm_phone import UrgentAlarmPhones
 from z1monitoring_models.models.farm import Farm
 from z1monitoring_models.models.plates import Plate
+from z1monitoring_models.models.events_flx import agua_da_amostra_sql
+
+# Litros da amostra da FLX pela regra dos models: soma o sensor 2 quando ele
+# é medição própria (modo independente).
+_AGUA = agua_da_amostra_sql()
 from z1monitoring_models.models.changes_requests import ChangesRequests
 from z1monitoring_models.models.plates_state import PlateState
 from z1monitoring_models.models.galpao import Galpao
@@ -2061,12 +2066,12 @@ def analise_consumo_detalhada(granja: str, dias: int = 10, data_inicio: str = No
 
         with Session() as session:
             # 1. Consumo diário de água (FLX)
-            daily_water = session.execute(text("""
+            daily_water = session.execute(text(f"""
                 SELECT
                     DATE(created_at) AS dia,
                     COUNT(*) AS total_leituras,
-                    ROUND(SUM((readings->>'water_flow')::numeric)) AS consumo_litros,
-                    ROUND(AVG((readings->>'water_flow')::numeric), 1) AS media_fluxo_lmin
+                    ROUND(SUM({_AGUA})) AS consumo_litros,
+                    ROUND(AVG({_AGUA}), 1) AS media_fluxo_lmin
                 FROM events_flx
                 WHERE farm = :farm
                   AND created_at >= :limite
@@ -2141,11 +2146,11 @@ def analise_consumo_detalhada(granja: str, dias: int = 10, data_inicio: str = No
 
             # 3. Perfil horário (divide período ao meio para comparação)
             metade = dias // 2
-            hourly = session.execute(text("""
+            hourly = session.execute(text(f"""
                 SELECT
                     CASE WHEN DATE(created_at) < (NOW() - INTERVAL :metade)::date THEN 'primeira_metade' ELSE 'segunda_metade' END AS periodo,
                     EXTRACT(HOUR FROM created_at)::int AS hora,
-                    ROUND(AVG((readings->>'water_flow')::numeric), 1) AS media_fluxo
+                    ROUND(AVG({_AGUA}), 1) AS media_fluxo
                 FROM events_flx
                 WHERE farm = :farm
                   AND created_at >= :limite
@@ -4596,11 +4601,11 @@ def validar_flx_vs_ccd(granja: str, dias: int = 14, data_inicio: str = None) -> 
 
         with Session() as session:
             # 1. Consumo diário FLX
-            flx_diario = session.execute(text("""
+            flx_diario = session.execute(text(f"""
                 SELECT DATE(created_at) AS dia,
-                    ROUND(SUM((readings->>'water_flow')::numeric)) AS litros,
-                    ROUND(AVG((readings->>'water_flow')::numeric), 1) AS media_fluxo,
-                    ROUND(MAX((readings->>'water_flow')::numeric), 1) AS max_fluxo,
+                    ROUND(SUM({_AGUA})) AS litros,
+                    ROUND(AVG({_AGUA}), 1) AS media_fluxo,
+                    ROUND(MAX({_AGUA}), 1) AS max_fluxo,
                     COUNT(*) AS leituras
                 FROM events_flx
                 WHERE farm = :farm AND created_at >= :limite
