@@ -127,7 +127,7 @@ def generate_consumption_graphics(farm, date_lower, date_upper):
     if has_ccd:
         # Usa CCD para consumo de ácido, cloro e água
         _Event = get_events_model("CCD")
-        events = _Event.get_insumes_consumed_last_days(farm.name, date_lower, date_upper)
+        events = _Event.get_insumes_consumed_last_days(farm.id, date_lower, date_upper)
         log.info(f"CCD consumption_graphics - Total events returned: {len(events)}")
         for ev in events:
             day_key = ev.created_at.strftime("%Y-%m-%d")
@@ -152,7 +152,7 @@ def generate_consumption_graphics(farm, date_lower, date_upper):
     elif has_z1:
         # Usa Z1 (legacy) para consumo de ácido e cloro
         _Event = get_events_model("Z1")
-        events = _Event.get_insumes_consumed_last_days(farm.name, date_lower, date_upper)
+        events = _Event.get_insumes_consumed_last_days(farm.id, date_lower, date_upper)
         for ev in events:
             day_key = ev.created_at.strftime("%Y-%m-%d")
             if day_key not in consumption_data:
@@ -173,7 +173,7 @@ def generate_consumption_graphics(farm, date_lower, date_upper):
         # (acido/cloro/gas). Ácido/cloro entram no gráfico principal; o gás
         # segue no gráfico WGT dedicado (bloco 2).
         _Event = get_events_model("WGT")
-        events = _Event.get_insumes_consumed_last_days(farm.name, date_lower, date_upper)
+        events = _Event.get_insumes_consumed_last_days(farm.id, date_lower, date_upper)
         field_to_key = {"acido": "acid_consumed_acc", "cloro": "chlorine_consumed_acc"}
         for created_at, field_name, value in events:
             insume_key = field_to_key.get(field_name)
@@ -209,7 +209,7 @@ def generate_consumption_graphics(farm, date_lower, date_upper):
             continue
 
         _Event = get_events_model("FLX")
-        events = _Event.get_water_consumed_last_days(farm.name, plate["serial"], date_lower, date_upper)
+        events = _Event.get_water_consumed_last_days(plate["serial"], date_lower, date_upper)
         for ev in events:
             day_key = ev.created_at.strftime("%Y-%m-%d")
             if day_key not in consumption_data:
@@ -233,7 +233,7 @@ def generate_consumption_graphics(farm, date_lower, date_upper):
 
     # Adiciona temperatura (FLX)
     _Event = get_events_model("FLX")
-    temp_events = _Event.get_mean_temperature_water_consumed_last_days(farm.name, date_lower, date_upper)
+    temp_events = _Event.get_mean_temperature_water_consumed_last_days(farm.id, date_lower, date_upper)
     for ev in temp_events:
         day_key = ev.created_at.strftime("%Y-%m-%d")
         if day_key not in consumption_data:
@@ -314,7 +314,7 @@ def generate_consumption_graphics(farm, date_lower, date_upper):
 
         # Busca eventos de consumo WGT
         _Event = get_events_model("WGT")
-        events = _Event.get_insumes_consumed_last_days(farm.name, date_lower, date_upper)
+        events = _Event.get_insumes_consumed_last_days(farm.id, date_lower, date_upper)
 
         for ev in events:
             created_at = ev[0]
@@ -339,7 +339,7 @@ def generate_consumption_graphics(farm, date_lower, date_upper):
         log.info(f"WGT iomap load1 - capacidade: {capacidade}, multiplier: {multiplier}")
 
         # Busca valores de gás disponível por dia (load1)
-        events_gas_level = _Event.get_gas_level_by_day(farm.name, date_lower, date_upper)
+        events_gas_level = _Event.get_gas_level_by_day(farm.id, date_lower, date_upper)
         gas_level_data = {}
         for ev in events_gas_level:
             day_key = ev[0].strftime("%Y-%m-%d")

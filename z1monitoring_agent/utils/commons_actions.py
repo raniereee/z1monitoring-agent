@@ -692,7 +692,7 @@ def handler_tempo_real_fluxo(response, farm, plates):
         else:
             if plate["plate_type"] == "FLX":
                 _Event = get_events_model(plate["plate_type"])
-                last_ev = _Event.get_water_consumed_at_date(plate["farm_associated"], plate["serial"], data_solicited)
+                last_ev = _Event.get_water_consumed_at_date(plate["serial"], data_solicited)
                 msg_text += mount_realtime_water_flow(plate, last_ev)
 
     return [{"type": "text", "msg": msg_text}]

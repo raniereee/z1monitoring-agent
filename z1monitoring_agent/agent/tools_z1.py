@@ -1914,7 +1914,7 @@ def consumo(granja: str, dias: int = 7, formato: str = "dados") -> dict:
 
         if has_ccd:
             _Event = get_events_model("CCD")
-            events = _Event.get_insumes_consumed_last_days(farm.name, date_lower, date_upper)
+            events = _Event.get_insumes_consumed_last_days(farm.id, date_lower, date_upper)
             for ev in events:
                 day_key = ev.created_at.strftime("%Y-%m-%d")
                 consumption_data[day_key] = {
@@ -1924,7 +1924,7 @@ def consumo(granja: str, dias: int = 7, formato: str = "dados") -> dict:
                 }
         elif has_z1:
             _Event = get_events_model("Z1")
-            events = _Event.get_insumes_consumed_last_days(farm.name, date_lower, date_upper)
+            events = _Event.get_insumes_consumed_last_days(farm.id, date_lower, date_upper)
             for ev in events:
                 day_key = ev.created_at.strftime("%Y-%m-%d")
                 consumption_data[day_key] = {
@@ -1936,7 +1936,7 @@ def consumo(granja: str, dias: int = 7, formato: str = "dados") -> dict:
             # ácido/cloro. Eventos vêm como tuplas (created_at, field_name,
             # value) com field_name normalizado (acido/cloro/gas).
             _Event = get_events_model("WGT")
-            events = _Event.get_insumes_consumed_last_days(farm.name, date_lower, date_upper)
+            events = _Event.get_insumes_consumed_last_days(farm.id, date_lower, date_upper)
             field_to_key = {"acido": "acido_kg", "cloro": "cloro_kg"}
             for created_at, field_name, value in events:
                 insume_key = field_to_key.get(field_name)
@@ -1966,7 +1966,7 @@ def consumo(granja: str, dias: int = 7, formato: str = "dados") -> dict:
             if p.plate_type != "FLX":
                 continue
             _Event = get_events_model("FLX")
-            events = _Event.get_water_consumed_last_days(farm.name, p.serial, date_lower, date_upper)
+            events = _Event.get_water_consumed_last_days(p.serial, date_lower, date_upper)
             for ev in events:
                 day_key = ev.created_at.strftime("%Y-%m-%d")
                 if day_key not in consumption_data:
@@ -2073,11 +2073,11 @@ def analise_consumo_detalhada(granja: str, dias: int = 10, data_inicio: str = No
                     ROUND(SUM({_AGUA})) AS consumo_litros,
                     ROUND(AVG({_AGUA}), 1) AS media_fluxo_lmin
                 FROM events_flx
-                WHERE farm = :farm
+                WHERE farm_id = :farm_id
                   AND created_at >= :limite
                 GROUP BY DATE(created_at)
                 ORDER BY dia
-            """), {"farm": farm.name, "limite": now_utc() - timedelta(days=dias)}).fetchall()
+            """), {"farm_id": farm.id, "limite": now_utc() - timedelta(days=dias)}).fetchall()
 
             result["consumo_agua_diario"] = [
                 {"dia": str(r[0]), "leituras": r[1], "litros": float(r[2] or 0), "media_fluxo_lmin": float(r[3] or 0)}
@@ -2108,11 +2108,11 @@ def analise_consumo_detalhada(granja: str, dias: int = 10, data_inicio: str = No
                             0
                         ), 1) AS cloro_kg
                     FROM events_ccd
-                    WHERE farm = :farm
+                    WHERE farm_id = :farm_id
                       AND created_at >= :limite
                     GROUP BY DATE(created_at)
                     ORDER BY dia
-                """), {"farm": farm.name, "limite": now_utc() - timedelta(days=dias)}).fetchall()
+                """), {"farm_id": farm.id, "limite": now_utc() - timedelta(days=dias)}).fetchall()
 
                 result["consumo_insumos_diario"] = [
                     {"dia": str(r[0]), "acido_kg": float(r[1] or 0), "cloro_kg": float(r[2] or 0)}
@@ -2133,11 +2133,11 @@ def analise_consumo_detalhada(granja: str, dias: int = 10, data_inicio: str = No
                             0
                         ), 1) AS cloro_kg
                     FROM events_z1
-                    WHERE farm = :farm
+                    WHERE farm_id = :farm_id
                       AND created_at >= :limite
                     GROUP BY DATE(created_at)
                     ORDER BY dia
-                """), {"farm": farm.name, "limite": now_utc() - timedelta(days=dias)}).fetchall()
+                """), {"farm_id": farm.id, "limite": now_utc() - timedelta(days=dias)}).fetchall()
 
                 result["consumo_insumos_diario"] = [
                     {"dia": str(r[0]), "acido_kg": float(r[1] or 0), "cloro_kg": float(r[2] or 0)}
@@ -2152,11 +2152,11 @@ def analise_consumo_detalhada(granja: str, dias: int = 10, data_inicio: str = No
                     EXTRACT(HOUR FROM created_at)::int AS hora,
                     ROUND(AVG({_AGUA}), 1) AS media_fluxo
                 FROM events_flx
-                WHERE farm = :farm
+                WHERE farm_id = :farm_id
                   AND created_at >= :limite
                 GROUP BY periodo, hora
                 ORDER BY periodo, hora
-            """), {"farm": farm.name, "limite": now_utc() - timedelta(days=dias),
+            """), {"farm_id": farm.id, "limite": now_utc() - timedelta(days=dias),
                  "metade": f"{metade} days"}).fetchall()
 
             perfil_primeira = {}
@@ -2177,7 +2177,7 @@ def analise_consumo_detalhada(granja: str, dias: int = 10, data_inicio: str = No
                         created_at,
                         LAG(created_at) OVER (ORDER BY created_at) AS prev
                     FROM events_flx
-                    WHERE farm = :farm
+                    WHERE farm_id = :farm_id
                       AND created_at >= :limite
                 )
                 SELECT
@@ -2189,7 +2189,7 @@ def analise_consumo_detalhada(granja: str, dias: int = 10, data_inicio: str = No
                   AND EXTRACT(EPOCH FROM (created_at - prev)) / 60 > 15
                 ORDER BY prev DESC
                 LIMIT 20
-            """), {"farm": farm.name, "limite": now_utc() - timedelta(days=dias)}).fetchall()
+            """), {"farm_id": farm.id, "limite": now_utc() - timedelta(days=dias)}).fetchall()
 
             result["periodos_offline_flx"] = [
                 {"inicio": str(r[0]), "retorno": str(r[1]), "minutos": int(r[2])}
@@ -2479,7 +2479,8 @@ def panorama_24h(granja: str = None, cliente_primario: str = None) -> dict:
             if has_ccd or has_z1:
                 try:
                     _Event = get_events_model("CCD" if has_ccd else "Z1")
-                    events = _Event.get_insumes_consumed_last_days(farm_name, date_lower, date_upper) or []
+                    farm_id = next((p.farm_id for p in plates if p.farm_id), None)
+                    events = _Event.get_insumes_consumed_last_days(farm_id, date_lower, date_upper) or []
                     acido = sum(float(getattr(e, "acid_consumed_acc", 0) or 0) for e in events)
                     cloro = sum(float(getattr(e, "chlorine_consumed_acc", 0) or 0) for e in events)
                     if acido > 0:
@@ -4608,10 +4609,10 @@ def validar_flx_vs_ccd(granja: str, dias: int = 14, data_inicio: str = None) -> 
                     ROUND(MAX({_AGUA}), 1) AS max_fluxo,
                     COUNT(*) AS leituras
                 FROM events_flx
-                WHERE farm = :farm AND created_at >= :limite
+                WHERE farm_id = :farm_id AND created_at >= :limite
                 GROUP BY DATE(created_at)
                 ORDER BY dia
-            """), {"farm": farm.name, "limite": now_utc() - timedelta(days=dias)}).fetchall()
+            """), {"farm_id": farm.id, "limite": now_utc() - timedelta(days=dias)}).fetchall()
 
             result["flx_diario"] = [
                 {"dia": str(r[0]), "litros": float(r[1] or 0), "media": float(r[2] or 0),
@@ -4631,12 +4632,12 @@ def validar_flx_vs_ccd(granja: str, dias: int = 14, data_inicio: str = None) -> 
                             (readings->>'ORP')::numeric AS orp,
                             ROW_NUMBER() OVER (PARTITION BY DATE(created_at) ORDER BY created_at DESC) AS rn
                         FROM events_ccd
-                        WHERE farm = :farm AND created_at >= :limite
+                        WHERE farm_id = :farm_id AND created_at >= :limite
                     )
                     SELECT dia, ROUND(acido_24h, 2) AS acido_24h, ROUND(cloro_24h, 2) AS cloro_24h,
                            ROUND(ph, 2) AS ph, ROUND(orp, 0) AS orp
                     FROM ultimo_do_dia WHERE rn = 1 ORDER BY dia
-                """), {"farm": farm.name, "limite": now_utc() - timedelta(days=dias)}).fetchall()
+                """), {"farm_id": farm.id, "limite": now_utc() - timedelta(days=dias)}).fetchall()
 
                 result["ccd_diario"] = [
                     {"dia": str(r[0]), "acido_24h": float(r[1] or 0), "cloro_24h": float(r[2] or 0),
@@ -4649,10 +4650,10 @@ def validar_flx_vs_ccd(granja: str, dias: int = 14, data_inicio: str = None) -> 
                     SELECT DATE(created_at) AS dia,
                         ROUND(SUM(COALESCE((readings->>'Fluxo de Água')::numeric, 0))) AS litros
                     FROM events_ccd
-                    WHERE farm = :farm AND created_at >= :limite
+                    WHERE farm_id = :farm_id AND created_at >= :limite
                     GROUP BY DATE(created_at)
                     ORDER BY dia
-                """), {"farm": farm.name, "limite": now_utc() - timedelta(days=dias)}).fetchall()
+                """), {"farm_id": farm.id, "limite": now_utc() - timedelta(days=dias)}).fetchall()
 
                 ccd_agua_map = {str(r[0]): float(r[1] or 0) for r in ccd_agua}
 
