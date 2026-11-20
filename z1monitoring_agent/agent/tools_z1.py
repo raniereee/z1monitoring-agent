@@ -3525,7 +3525,6 @@ def agendar_ph(
         schedule = PhSchedule({
             "serial": plate.serial,
             "farm_id": farm.id,
-            "farm_name": farm.name,
             "ph_min": ph_min,
             "ph_max": ph_max,
             "scheduled_at": scheduled_dt,
