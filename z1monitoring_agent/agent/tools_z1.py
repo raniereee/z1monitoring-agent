@@ -523,7 +523,7 @@ def consultar_equipamentos(status: str = "offline") -> dict:
             now = now_utc()
 
             for plate in plates:
-                last = LastEvent.get_last_register(plate.owner, plate.serial)
+                last = LastEvent.get_last_register(plate.serial)
                 ultimo_contato = last.get("created_at") if isinstance(last, dict) else getattr(last, "created_at", None) if last else None
                 dias_offline = (now - ultimo_contato).days if ultimo_contato else 999
 
@@ -4314,7 +4314,7 @@ def saude_empresa(empresa: str, problema: str = "todos", dias_minimo: int = 0) -
                 if problema in ("offline", "todos"):
                     state = PlateState.load(plate.serial)
                     if state and not state.have_communication:
-                        last = LastEvent.get_last_register(plate.owner, plate.serial)
+                        last = LastEvent.get_last_register(plate.serial)
                         ultimo = (
                             last.get("created_at") if isinstance(last, dict)
                             else getattr(last, "created_at", None) if last
