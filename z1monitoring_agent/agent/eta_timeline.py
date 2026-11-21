@@ -16,6 +16,7 @@ Regras importantes:
 """
 
 from datetime import datetime, timedelta
+from z1monitoring_models.crypto import PGP_KEY
 from z1monitoring_models.tz import now_utc
 from typing import Optional
 
@@ -135,10 +136,11 @@ def _get_plates_by_type(farm_id: int, plate_type: str):
     with Session() as session:
         rows = session.execute(
             text(
-                "SELECT serial, owner, params FROM plates "
-                "WHERE farm_id = :fid AND plate_type = :pt"
+                "SELECT p.serial, pgp_sym_decrypt(f.owner_encrypted, :pgp_key), p.params "
+                "FROM plates p JOIN farms f ON f.id = p.farm_id "
+                "WHERE p.farm_id = :fid AND p.plate_type = :pt"
             ),
-            {"fid": farm_id, "pt": plate_type},
+            {"fid": farm_id, "pt": plate_type, "pgp_key": PGP_KEY},
         ).all()
     return [(r[0], r[1], r[2] or {}) for r in rows]
 
